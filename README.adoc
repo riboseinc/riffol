@@ -48,9 +48,9 @@ The main configuration to create application groups:
 [source]
 ----
 init "name" {
-	application_groups = [
-		"applicationgroup.name"
-	]
+  application_groups = [
+    "applicationgroup.name"
+  ]
 }
 ----
 
@@ -59,9 +59,9 @@ E.g.:
 [source]
 ----
 init "web" {
-	application_groups = [
-		"applicationgroup.webstack"
-	]
+  application_groups = [
+    "applicationgroup.webstack"
+  ]
 }
 ----
 
@@ -72,12 +72,12 @@ The entered entries in the `applications[]` list is also the order in which appl
 [source]
 ----
 application_group "name" {
-	applications = [
-		"application.name"
-	]
-	dependencies = [
-		"dependency.name"
-	]
+  applications = [
+    "application.name"
+  ]
+  dependencies = [
+    "dependency.name"
+  ]
 }
 ----
 
@@ -86,13 +86,13 @@ E.g.:
 [source]
 ----
 application_group "webstack" {
-	applications = [
-		"application.db",
-		"application.www"
-	]
-	dependencies = [
-		"dependency.webstackdependencies"
-	]
+  applications = [
+    "application.db",
+    "application.www"
+  ]
+  dependencies = [
+    "dependency.webstackdependencies"
+  ]
 }
 ----
 
@@ -101,18 +101,18 @@ application_group "webstack" {
 [source]
 ----
 application "name" {
-	exec = "string"
-	start = "string"
-	stop = "string"
-	restart = "string"
-	stdout = "string"
-	stderr = "string"
-	uid = int
-	gid = int
-	healthchecks = [
-		"healthcheck.name"
-	]
-	healthcheckfail = "string"
+  exec = "string"
+  start = "string"
+  stop = "string"
+  restart = "string"
+  stdout = "string"
+  stderr = "string"
+  uid = int
+  gid = int
+  healthchecks = [
+    "healthcheck.name"
+  ]
+  healthcheckfail = "string"
 }
 ----
 
@@ -121,18 +121,18 @@ E.g.:
 [source]
 ----
 application "www" {
-	exec = "/etc/init.d/http"
-	start = "start"
-	stop = "stop"
-	restart = "restart"
-	stdout = ""
-	stderr = ""
-	uid = 0
-	gid = 0
-	healthchecks = [
-		"healthcheck.www"
-	]
-	healthcheckfail = "restart"
+  exec = "/etc/init.d/http"
+  start = "start"
+  stop = "stop"
+  restart = "restart"
+  stdout = ""
+  stderr = ""
+  uid = 0
+  gid = 0
+  healthchecks = [
+    "healthcheck.www"
+  ]
+  healthcheckfail = "restart"
 }
 ----
 
@@ -141,11 +141,11 @@ application "www" {
 [source]
 ----
 healthcheck "name" {
-	checks = [
-		"key://value"
-	]
-	interval = int
-	timeout = int
+  checks = [
+    "key://value"
+  ]
+  interval = int
+  timeout = int
 }
 ----
 
@@ -168,13 +168,13 @@ E.g.:
 [source]
 ----
 healthcheck "db" {
-	checks = [
-		"df:///var/lib/mysql:512"
-		"proc://mysqld",
-		"tcp://127.0.0.1:3306"
-	]
-	interval = 60
-	timeout = 10
+  checks = [
+    "df:///var/lib/mysql:512"
+    "proc://mysqld",
+    "tcp://127.0.0.1:3306"
+  ]
+  interval = 60
+  timeout = 10
 }
 ----
 
@@ -187,9 +187,9 @@ e.g.: on RHEL/CentOS Riffol will execute `rpm -q ${name}`
 [source]
 ----
 dependency "name" {
-	packages = [
-		"string"
-	]
+  packages = [
+    "string"
+  ]
 }
 ----
 
@@ -198,10 +198,10 @@ E.g.:
 [source]
 ----
 dependency "webstack" {
-	packages = [
-		"httpd",
-		"mariadb"
-	]
+  packages = [
+    "httpd",
+    "mariadb"
+  ]
 }
 ----
 
@@ -211,8 +211,8 @@ dependency "webstack" {
 [source]
 ----
 limits "name" {
-	max_procs = int
-	max_mem = int
+  max_procs = int
+  max_mem = int
 }
 ----
 
@@ -221,8 +221,8 @@ e.g.:
 [source]
 ----
 limits "db" {
-	max_procs = 4
-	max_mem = 1024
+  max_procs = 4
+  max_mem = 1024
 }
 ----
 
@@ -244,9 +244,9 @@ stream_destination "logfile" {
 }
 
 application "www" {
-	...
-	stdout = "${stream_desination.logfile}"
-	stderr = "${stream_desination.rsyslog}"
+  ...
+  stdout = "${stream_desination.logfile}"
+  stderr = "${stream_desination.rsyslog}"
   ...
 }
 ----
