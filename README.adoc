@@ -250,3 +250,9 @@ application "www" {
   ...
 }
 ----
+
+== ... Riffol?
+
+https://en.wikipedia.org/wiki/Salmon_run#The_spawning
+
+> The eggs of a female salmon are called her roe. To lay her roe, the female salmon builds a **spawn**ing nest, called a redd, in a riffle with gravel as its streambed. A **riffle** is a relatively shallow length of stream where the water is turbulent and flows faster.
