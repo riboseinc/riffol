@@ -1,0 +1,252 @@
+= Riffol
+
+Riffol is a supervising process that can run as a traditional daemon on
+Unix-like systems or as an `init` system for containers
+(such as https://github.com/krallin/tini[tini]).
+
+Riffol can be configured by creating application groups that consist of
+applications, health checks and dependency checks.
+
+Riffol uses the unified configuration model from
+https://github.com/riboseinc/event-configuration-models for its
+configuration syntax definition, startup configuration and
+also runtime configuration.
+
+Riffol is implemented in Rust.
+
+
+== Components
+
+[source]
+----
+   +--------+
+   | Riffol |
+   +----+---+
+        |
+        |
+        |
+ +------v------+
+ | Application |
+ |    Group    +-------+--------------+---------------+
+ +------+------+       |              |               |
+        |              |              |               |
+        |              |              |               |
+        |              |              |               |
+ +------v------+   +---v----+   +-----v------+   +----v-----+
+ | Application |   | Health |   | Dependency |   | Resource |
+ +-------------+   | Check  |   +------------+   |  Limits  |
+                   +--------+                    +----------+
+----
+
+
+== Configuration
+
+=== Init
+
+The main configuration to create application groups:
+
+[source]
+----
+init "name" {
+	application_groups = [
+		"applicationgroup.name"
+	]
+}
+----
+
+E.g.:
+
+[source]
+----
+init "web" {
+	application_groups = [
+		"applicationgroup.webstack"
+	]
+}
+----
+
+=== Application Group
+
+The entered entries in the `applications[]` list is also the order in which applications should be started.
+
+[source]
+----
+application_group "name" {
+	applications = [
+		"application.name"
+	]
+	dependencies = [
+		"dependency.name"
+	]
+}
+----
+
+E.g.:
+
+[source]
+----
+application_group "webstack" {
+	applications = [
+		"application.db",
+		"application.www"
+	]
+	dependencies = [
+		"dependency.webstackdependencies"
+	]
+}
+----
+
+=== Application
+
+[source]
+----
+application "name" {
+	exec = "string"
+	start = "string"
+	stop = "string"
+	restart = "string"
+	stdout = "string"
+	stderr = "string"
+	uid = int
+	gid = int
+	healthchecks = [
+		"healthcheck.name"
+	]
+	healthcheckfail = "string"
+}
+----
+
+E.g.:
+
+[source]
+----
+application "www" {
+	exec = "/etc/init.d/http"
+	start = "start"
+	stop = "stop"
+	restart = "restart"
+	stdout = ""
+	stderr = ""
+	uid = 0
+	gid = 0
+	healthchecks = [
+		"healthcheck.www"
+	]
+	healthcheckfail = "restart"
+}
+----
+
+=== Health Check
+
+[source]
+----
+healthcheck "name" {
+	checks = [
+		"key://value"
+	]
+	interval = int
+	timeout = int
+}
+----
+
+There are several `checks` classes:
+
+. `df`, disk free space
+. `proc`, process name
+. `tcp`, TCP connection
+. `udp`, UDP connection
+. `http`, establish a http connection
+. `https`, establish a https connection
+
+Parameters:
+
+. `interval`, the interval of the check defined in seconds
+. `timeout`, the timeout of network connections defined in seconds
+
+E.g.:
+
+[source]
+----
+healthcheck "db" {
+	checks = [
+		"df:///var/lib/mysql:512"
+		"proc://mysqld",
+		"tcp://127.0.0.1:3306"
+	]
+	interval = 60
+	timeout = 10
+}
+----
+
+=== Dependency
+
+A `packages[]` dependency is checked via an operating system specific method.
+
+e.g.: on RHEL/CentOS Riffol will execute `rpm -q ${name}`
+
+[source]
+----
+dependency "name" {
+	packages = [
+		"string"
+	]
+}
+----
+
+E.g.:
+
+[source]
+----
+dependency "webstack" {
+	packages = [
+		"httpd",
+		"mariadb"
+	]
+}
+----
+
+
+=== Resource Limits
+
+[source]
+----
+limits "name" {
+	max_procs = int
+	max_mem = int
+}
+----
+
+e.g.:
+
+[source]
+----
+limits "db" {
+	max_procs = 4
+	max_mem = 1024
+}
+----
+
+
+=== Redirection and stream destination
+
+[source]
+----
+stream_destination "rsyslog" {
+  encoding = "UTF"
+  host = "192.168.1.3"
+  port = 514
+  protocol = "udp"
+}
+
+stream_destination "logfile" {
+  encoding = "UTF"
+  file = "/var/log/mylogs"
+}
+
+application "www" {
+	...
+	stdout = "${stream_desination.logfile}"
+	stderr = "${stream_desination.rsyslog}"
+  ...
+}
+----
