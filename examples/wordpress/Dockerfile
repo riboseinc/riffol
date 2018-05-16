@@ -5,13 +5,14 @@ run apt-get update \
     && apt-get -y install --no-install-recommends wordpress mysql-server
 
 copy apache.conf /etc/apache2/sites-available/wordpress.conf
-copy wordpress.php /etc/wordpress/config-default.php
-copy wordpress.sql /tmp
-
-run /etc/init.d/mysql start && mysql --defaults-extra-file=/etc/mysql/debian.cnf </tmp/wordpress.sql
 run a2enmod rewrite && a2enmod vhost_alias && a2dissite 000-default && a2ensite wordpress
 
-copy riffol.conf /etc
-copy riffol /usr/bin
+copy wordpress.php /etc/wordpress/config-default.php
+copy wordpress.sql /tmp
+copy initialise-mysql.sh /tmp
 
-cmd riffol /etc/riffol.conf
+copy libucl.so /usr/lib/libucl.so.5
+copy riffol /usr/bin
+copy riffol.conf /etc
+
+cmd riffol -f /etc/riffol.conf

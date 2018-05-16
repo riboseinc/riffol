@@ -3,33 +3,45 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-pub trait HealthCheck {
-    fn do_check(&self) -> bool;
+#[derive(Debug)]
+pub enum HealthCheck {
+    DfCheck(DfCheck),
+    ProcCheck(ProcCheck),
+    TcpCheck(TcpCheck),
 }
 
+impl HealthCheck {
+    pub fn do_check(&self) -> bool {
+        match self {
+            HealthCheck::DfCheck(s) => s.do_check(),
+            HealthCheck::ProcCheck(s) => s.do_check(),
+            HealthCheck::TcpCheck(s) => s.do_check(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct IntervalHealthCheck {
-    interval: Duration,
-    the_check: Box<HealthCheck>,
+    pub interval: Duration,
+    pub timeout: Duration,
+    the_check: HealthCheck,
 }
 
 impl IntervalHealthCheck {
-    pub fn new(interval: Duration, check: Box<HealthCheck>) -> IntervalHealthCheck {
+    pub fn new(interval: Duration, timeout: Duration, check: HealthCheck) -> IntervalHealthCheck {
         IntervalHealthCheck {
             interval: interval,
+            timeout: timeout,
             the_check: check,
         }
     }
-    pub fn get_interval(&self) -> &Duration {
-        &self.interval
-    }
-}
 
-impl HealthCheck for IntervalHealthCheck {
-    fn do_check(&self) -> bool {
+    pub fn do_check(&self) -> bool {
         self.the_check.do_check()
     }
 }
 
+#[derive(Debug)]
 pub struct DfCheck {
     free: u64,
     path: PathBuf,
@@ -42,9 +54,7 @@ impl DfCheck {
             free: free,
         }
     }
-}
 
-impl HealthCheck for DfCheck {
     fn do_check(&self) -> bool {
         fn avail(o: &Vec<u8>) -> Option<u64> {
             match String::from_utf8_lossy(o).lines().skip(1).next() {
@@ -71,6 +81,7 @@ impl HealthCheck for DfCheck {
     }
 }
 
+#[derive(Debug)]
 pub struct ProcCheck {
     process: String,
 }
@@ -81,9 +92,7 @@ impl ProcCheck {
             process: String::from(process),
         }
     }
-}
 
-impl HealthCheck for ProcCheck {
     fn do_check(&self) -> bool {
         match Command::new("/bin/pidof").arg(&self.process).status() {
             Ok(s) if s.success() => true,
@@ -92,23 +101,20 @@ impl HealthCheck for ProcCheck {
     }
 }
 
+#[derive(Debug)]
 pub struct TcpCheck {
     addr: SocketAddr,
-    timeout: Duration,
 }
 
 impl TcpCheck {
-    pub fn new(addr: &SocketAddr, timeout: &Duration) -> TcpCheck {
+    pub fn new(addr: &SocketAddr) -> TcpCheck {
         TcpCheck {
             addr: (*addr).clone(),
-            timeout: (*timeout).clone(),
         }
     }
-}
 
-impl HealthCheck for TcpCheck {
     fn do_check(&self) -> bool {
-        match TcpStream::connect_timeout(&self.addr, self.timeout) {
+        match TcpStream::connect(&self.addr) {
             Ok(_) => true,
             Err(_) => false,
         }
