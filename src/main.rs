@@ -2,9 +2,15 @@ extern crate riffol;
 
 use riffol::config::{get_config, Application};
 use std::process::Command;
+use std::env;
 
 fn main() {
-    let config = match get_config("riffol.conf") {
+    let config_path = match env::args().skip(1).next() {
+        Some(p) => p,
+	None => String::from("./riffol.conf")
+    };
+
+    let config = match get_config(config_path) {
         Ok(c) => c,
 	Err(s) => {
 	    println!("{}", s);
@@ -12,7 +18,9 @@ fn main() {
 	}
     };
 
-    let (running, failed): (Vec<Option<&Application>>, Vec<Option<&Application>>) = config.applications.iter().map(|ap| {
+    let (running, failed)
+    : (Vec<Option<&Application>>, Vec<Option<&Application>>)
+    = config.applications.iter().map(|ap| {
         let result = Command::new(format!("{} {}", ap.exec, ap.start))
 	                     .spawn();
         match result {
