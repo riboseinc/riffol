@@ -37,14 +37,14 @@ fn default_application_stop() -> String { "stop".to_string() }
 fn default_application_restart() -> String { "restart".to_string() }
 
 pub struct Config {
-    applications: Vec<Application>,
+    pub applications: Vec<Application>,
 }
 
 pub struct Application {
-    exec: String,
-    start: String,
-    stop: String,
-    restart: String
+    pub exec: String,
+    pub start: String,
+    pub stop: String,
+    pub restart: String
 }
 
 pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
@@ -54,12 +54,19 @@ pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
 	    , path.as_ref().display(), s))
     };
 
+    let mut config = Config { applications: vec![] };
     for group_name in json_config.init.application_groups {
         match json_config.application_groups.get(&group_name) {
 	    Some(group) => {
 	        for ap_name in &group.applications {
 		    match json_config.applications.get(ap_name) {
-		        Some(ap) => {},
+		        Some(ap) => {
+			    config.applications.push(Application {
+			        exec: ap.exec.clone(),
+				start: ap.start.clone(),
+				stop: ap.stop.clone(),
+				restart: ap.restart.clone()
+			    })},
 			None => return Err(format!("No such application \"{}\"", ap_name))
 		    }
 		}
@@ -68,7 +75,7 @@ pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
 	}
     }
 
-    Ok(Config{applications: vec![]})
+    Ok(config)
 }
 
 fn read_config<P: AsRef<Path>>(path: P) -> io::Result<JSONConfig> {
