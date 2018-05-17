@@ -256,3 +256,5 @@ application "www" {
 https://en.wikipedia.org/wiki/Salmon_run#The_spawning
 
 > The eggs of a female salmon are called her roe. To lay her roe, the female salmon builds a **spawn**ing nest, called a redd, in a riffle with gravel as its streambed. A **riffle** is a relatively shallow length of stream where the water is turbulent and flows faster.
+
+By spelling "riffol" with an O, we are putting the chemical symbol for oxygen in the word: we are https://en.wikipedia.org/wiki/Redox[oxidising] Riffol. Which makes sense, since Riffol is in Rust.
