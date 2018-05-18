@@ -2,7 +2,8 @@ extern crate riffol;
 
 use riffol::config::{get_config, Application};
 use std::process::Command;
-use std::{env, thread, time};
+use std::{env, thread};
+use std::time::{Instant};
 
 fn main() {
     let arg0 = env::args().next().unwrap();
@@ -64,13 +65,27 @@ fn main() {
         }
     }
 
-    let sleep_duration = time::Duration::from_secs(1);
     loop {
         for ap in &mut config.applications {
-            for healthcheck in &mut ap.healthchecks {
-	        if !healthcheck.check() {}
+            for health_check in &mut ap.health_checks {
+	        if !health_check.check() {
+		    // TODO: health_checkfail
+		}
 	    }
 	}
-        thread::sleep(sleep_duration);
+
+	let next_check_instant = config.applications.iter()
+	.fold(vec![], |mut a, ap| {
+	    for c in &ap.health_checks {
+	        a.push(c.get_check_instant());
+	    }
+	    a
+	}).iter().min().unwrap().clone();
+
+	let now = Instant::now();
+
+	if next_check_instant > now {
+            thread::sleep(now - next_check_instant);
+	}
     }
 }

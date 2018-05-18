@@ -15,11 +15,11 @@ struct JSONConfig {
     application_groups: HashMap<String, JSONApplicationGroup>,
     applications: HashMap<String, JSONApplication>,
     dependencies: HashMap<String, Vec<String>>,
-    #[serde(default = "default_config_healthchecks")]
-    healthchecks: HashMap<String, JSONHealthchecks>
+    #[serde(default = "default_config_health_checks")]
+    health_checks: HashMap<String, JSONHealthChecks>
 }
 
-fn default_config_healthchecks() -> HashMap<String, JSONHealthchecks>{ HashMap::new() }
+fn default_config_health_checks() -> HashMap<String, JSONHealthChecks>{ HashMap::new() }
 
 #[derive(Deserialize)]
 struct JSONInit {
@@ -41,7 +41,7 @@ struct JSONApplication {
     stop: String,
     #[serde(default = "default_application_restart")]
     restart: String,
-    healthchecks: Option<Vec<String>>
+    health_checks: Option<Vec<String>>
 }
 
 fn default_application_start() -> String { "start".to_string() }
@@ -49,7 +49,7 @@ fn default_application_stop() -> String { "stop".to_string() }
 fn default_application_restart() -> String { "restart".to_string() }
 
 #[derive(Deserialize)]
-struct JSONHealthchecks {
+struct JSONHealthChecks {
     checks: Vec<HashMap<String, Value>>,
     interval: u64
 }
@@ -64,35 +64,38 @@ pub struct Application {
     pub start: String,
     pub stop: String,
     pub restart: String,
-    pub healthchecks: Vec<ScheduledHealthcheck>
+    pub health_checks: Vec<ScheduledHealthCheck>
 }
 
-pub struct ScheduledHealthcheck {
+pub struct ScheduledHealthCheck {
     instant: Instant,
     interval: Duration,
-    healthcheck: Box<Healthcheck>
+    health_check: Box<HealthCheck>
 }
 
-impl ScheduledHealthcheck {
+impl ScheduledHealthCheck {
     pub fn check(&mut self) -> bool {
         if Instant::now() < self.instant {
 	   self.instant += self.interval;
-	   return self.healthcheck.check();
+	   return self.health_check.check();
         }
 	true
     }
+    pub fn get_check_instant(&self) -> Instant {
+        self.instant
+    }
 }
 
-pub trait Healthcheck {
+pub trait HealthCheck {
     fn check(&self) -> bool;
 }
 
-pub struct DfHealthcheck {
+pub struct DfHealthCheck {
     file: String,
     free: u64
 }
 
-impl Healthcheck for DfHealthcheck {
+impl HealthCheck for DfHealthCheck {
     fn check(&self) -> bool {
         fn avail(o: &Vec<u8>) -> Option<u64> {
 	    match String::from_utf8_lossy(o).lines().skip(1).next() {
@@ -118,11 +121,11 @@ impl Healthcheck for DfHealthcheck {
     }
 }
 
-pub struct ProcHealthcheck {
+pub struct ProcHealthCheck {
     process: String,
 }
 
-impl Healthcheck for ProcHealthcheck {
+impl HealthCheck for ProcHealthCheck {
     fn check(&self) -> bool {
         match Command::new("/bin/pidof").arg(&self.process).status() {
 	    Ok(s) if s.success() => true,
@@ -131,12 +134,12 @@ impl Healthcheck for ProcHealthcheck {
     }
 }
 
-pub struct TcpHealthcheck {
+pub struct TcpHealthCheck {
     addr: SocketAddr,
     timeout: Duration
 }
 
-impl Healthcheck for TcpHealthcheck {
+impl HealthCheck for TcpHealthCheck {
     fn check(&self) -> bool {
         match TcpStream::connect_timeout(&self.addr, self.timeout) {
 	    Ok(_)  => true,
@@ -159,10 +162,10 @@ pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
 	        for ap_name in &group.applications {
 		    match json_config.applications.get(ap_name) {
 		        Some(ap) => {
-			    let healthchecks =
-				match &ap.healthchecks {
+			    let health_checks =
+				match &ap.health_checks {
 				    Some(cs) => {
-				        match get_healthchecks(&json_config.healthchecks, &cs) {
+				        match get_health_checks(&json_config.health_checks, &cs) {
 					    Ok(cs) => cs,
 					    Err(e) => return Err(e)
 					}
@@ -174,7 +177,7 @@ pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
 				start: ap.start.clone(),
 				stop: ap.stop.clone(),
 				restart: ap.restart.clone(),
-				healthchecks: healthchecks
+				health_checks: health_checks
 			    })
 			},
 			None => return Err(format!("No such application \"{}\"", ap_name))
@@ -199,10 +202,10 @@ fn read_config<P: AsRef<Path>>(path: P) -> io::Result<JSONConfig> {
     Ok(json_config)
 }
 
-fn get_healthchecks(
-    configs: &HashMap<String, JSONHealthchecks>,
+fn get_health_checks(
+    configs: &HashMap<String, JSONHealthChecks>,
     checks: &Vec<String>
-    ) -> Result<Vec<ScheduledHealthcheck>, String>
+    ) -> Result<Vec<ScheduledHealthCheck>, String>
 {
     let mut result = vec![];
 
@@ -210,66 +213,66 @@ fn get_healthchecks(
         match configs.get(check) {
 	    Some(config) => {
 	        for p in config.checks.iter() {
-		    match mk_healthcheck(p) {
-		        Ok(x) => result.push(ScheduledHealthcheck {
+		    match mk_health_check(p) {
+		        Ok(x) => result.push(ScheduledHealthCheck {
 			    instant: Instant::now() + Duration::from_secs(config.interval),
 			    interval: Duration::from_secs(config.interval),
-			    healthcheck: x
+			    health_check: x
 			}),
 			Err(e) => return Err(e)
 		    }
 		}
 	    },
-	    None => return Err(format!("No such healthcheck \"{}\"", check))
+	    None => return Err(format!("No such health_check \"{}\"", check))
 	}
     }
 
     Ok(result)
 }
 
-fn mk_healthcheck(params: &HashMap<String, Value>)
-    -> Result<Box<Healthcheck>, String> {
+fn mk_health_check(params: &HashMap<String, Value>)
+    -> Result<Box<HealthCheck>, String> {
     match params.get("type") {
         Some(Value::String(t)) => {
 	    match t.as_ref() {
-	        "proc" => mk_proc_healthcheck(params),
-	        "df" => mk_df_healthcheck(params),
-		"tcp" => mk_tcp_healthcheck(params),
-                _ => Err(format!("Unknown healthcheck type \"{}\"", t))
+	        "proc" => mk_proc_health_check(params),
+	        "df" => mk_df_health_check(params),
+		"tcp" => mk_tcp_health_check(params),
+                _ => Err(format!("Unknown health_check type \"{}\"", t))
 	    }
 	},
-	// TODO use serde deserialize_with to catch bad healthchecks
-	Some(t) => Err(format!("Unknown healthcheck type \"{:?}\"", t)),
-	_ => Err(String::from("Healthcheck configuration with no \"type\" field"))
+	// TODO use serde deserialize_with to catch bad health_checks
+	Some(t) => Err(format!("Unknown health_check type \"{:?}\"", t)),
+	_ => Err(String::from("Health_Check configuration with no \"type\" field"))
     }
 }
 
-fn mk_proc_healthcheck(params: &HashMap<String, Value>) -> Result<Box<Healthcheck>, String> {
+fn mk_proc_health_check(params: &HashMap<String, Value>) -> Result<Box<HealthCheck>, String> {
     match params.get("proc") {
-        Some(Value::String(p)) => Ok(Box::new(ProcHealthcheck{ process: p.clone() })),
-	_ => Err(String::from("Bad proc healthcheck. Use \"proc\" : \"<process_name>\""))
+        Some(Value::String(p)) => Ok(Box::new(ProcHealthCheck{ process: p.clone() })),
+	_ => Err(String::from("Bad proc health_check. Use \"proc\" : \"<process_name>\""))
     }
 }
 
-fn mk_df_healthcheck(params: &HashMap<String, Value>) -> Result<Box<Healthcheck>, String> {
+fn mk_df_health_check(params: &HashMap<String, Value>) -> Result<Box<HealthCheck>, String> {
     match (params.get("file"), params.get("free")) {
         (Some(Value::String(file)), Some(Value::Number(free))) if free.is_i64() =>
-	    Ok(Box::new(DfHealthcheck{ file: file.clone(), free: free.as_i64().unwrap() as u64 })),
-	_ => Err(String::from("Bad df healthcheck. Use \"file\" :\"<filename>\", \"free\" : <mb>"))
+	    Ok(Box::new(DfHealthCheck{ file: file.clone(), free: free.as_i64().unwrap() as u64 })),
+	_ => Err(String::from("Bad df health_check. Use \"file\" :\"<filename>\", \"free\" : <mb>"))
     }
 }
 
-fn mk_tcp_healthcheck(params: &HashMap<String, Value>) -> Result<Box<Healthcheck>, String> {
+fn mk_tcp_health_check(params: &HashMap<String, Value>) -> Result<Box<HealthCheck>, String> {
     match (params.get("addr"), params.get("timeout")) {
         (Some(Value::String(addr)), Some(Value::Number(timeout))) if timeout.is_i64() => {
 	    match addr.parse() {
-	        Ok(addr) => Ok(Box::new(TcpHealthcheck {
+	        Ok(addr) => Ok(Box::new(TcpHealthCheck {
 	            addr: addr,
 		    timeout: Duration::from_secs(timeout.as_i64().unwrap() as u64)
 	        })),
-                _ => Err(String::from("Bad tcp healthcheck. Malformed address"))
+                _ => Err(String::from("Bad tcp health_check. Malformed address"))
 	    }
 	},
-	_ => Err(String::from("Bad tcp healthcheck. Use \"addr\" :\"<address>\", \"timeout\" : <seconds>"))
+	_ => Err(String::from("Bad tcp health_check. Use \"addr\" :\"<address>\", \"timeout\" : <seconds>"))
     }
 }
