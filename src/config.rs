@@ -4,7 +4,10 @@ use serde_json;
 use serde_json::Value;
 use std::path::Path;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{SocketAddr, TcpStream};
+use std::time::{Duration, Instant};
+use std::process::Command;
+use std::iter::{Iterator};
 
 #[derive(Deserialize)]
 struct JSONConfig {
@@ -13,10 +16,10 @@ struct JSONConfig {
     applications: HashMap<String, JSONApplication>,
     dependencies: HashMap<String, Vec<String>>,
     #[serde(default = "default_config_healthchecks")]
-    healthchecks: HashMap<String, JSONHealthChecks>
+    healthchecks: HashMap<String, JSONHealthchecks>
 }
 
-fn default_config_healthchecks() -> HashMap<String, JSONHealthChecks>{ HashMap::new() }
+fn default_config_healthchecks() -> HashMap<String, JSONHealthchecks>{ HashMap::new() }
 
 #[derive(Deserialize)]
 struct JSONInit {
@@ -46,9 +49,9 @@ fn default_application_stop() -> String { "stop".to_string() }
 fn default_application_restart() -> String { "restart".to_string() }
 
 #[derive(Deserialize)]
-struct JSONHealthChecks {
+struct JSONHealthchecks {
     checks: Vec<HashMap<String, Value>>,
-    interval: i32
+    interval: u64
 }
 
 pub struct Config {
@@ -61,42 +64,84 @@ pub struct Application {
     pub start: String,
     pub stop: String,
     pub restart: String,
-    pub health_checks: Vec<Box<HealthCheck>>
+    pub healthchecks: Vec<ScheduledHealthcheck>
 }
 
-pub trait HealthCheck {
+pub struct ScheduledHealthcheck {
+    instant: Instant,
+    interval: Duration,
+    healthcheck: Box<Healthcheck>
+}
+
+impl ScheduledHealthcheck {
+    pub fn check(&mut self) -> bool {
+        if Instant::now() < self.instant {
+	   self.instant += self.interval;
+	   return self.healthcheck.check();
+        }
+	true
+    }
+}
+
+pub trait Healthcheck {
     fn check(&self) -> bool;
 }
 
-pub struct DFHealthCheck {
-    device: String,
-    free: i64
+pub struct DfHealthcheck {
+    file: String,
+    free: u64
 }
 
-impl HealthCheck for DFHealthCheck {
+impl Healthcheck for DfHealthcheck {
     fn check(&self) -> bool {
-        true
+        fn avail(o: &Vec<u8>) -> Option<u64> {
+	    match String::from_utf8_lossy(o).lines().skip(1).next() {
+	        Some(s) => match s.trim_right_matches('M').parse::<u64>() {
+		    Ok(n)  => Some(n),
+		    Err(_) => None
+		}
+		None    => None
+            }
+	};
+
+        match Command::new("/bin/df")
+	              .arg("-BM")
+		      .arg("--output=avail")
+		      .arg(&self.file)
+		      .output() {
+            Ok(o) => match (o.status.success(), avail(&o.stdout)) {
+	        (true, Some(n)) => self.free < n,
+		_         => false
+	    },
+	    _     => false
+	}
     }
 }
 
-pub struct ProcHealthCheck {
+pub struct ProcHealthcheck {
     process: String,
 }
 
-impl HealthCheck for ProcHealthCheck {
+impl Healthcheck for ProcHealthcheck {
     fn check(&self) -> bool {
-        true
+        match Command::new("/bin/pidof").arg(&self.process).status() {
+	    Ok(s) if s.success() => true,
+	    _                    => false
+	}
     }
 }
 
-pub struct TCPHealthCheck {
+pub struct TcpHealthcheck {
     addr: SocketAddr,
-    timeout: i32
+    timeout: Duration
 }
 
-impl HealthCheck for TCPHealthCheck {
+impl Healthcheck for TcpHealthcheck {
     fn check(&self) -> bool {
-        true
+        match TcpStream::connect_timeout(&self.addr, self.timeout) {
+	    Ok(_)  => true,
+	    Err(_) => false
+	}
     }
 }
 
@@ -114,10 +159,10 @@ pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
 	        for ap_name in &group.applications {
 		    match json_config.applications.get(ap_name) {
 		        Some(ap) => {
-			    let health_checks =
+			    let healthchecks =
 				match &ap.healthchecks {
 				    Some(cs) => {
-				        match get_health_checks(&json_config.healthchecks, &cs) {
+				        match get_healthchecks(&json_config.healthchecks, &cs) {
 					    Ok(cs) => cs,
 					    Err(e) => return Err(e)
 					}
@@ -129,7 +174,7 @@ pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
 				start: ap.start.clone(),
 				stop: ap.stop.clone(),
 				restart: ap.restart.clone(),
-				health_checks: health_checks
+				healthchecks: healthchecks
 			    })
 			},
 			None => return Err(format!("No such application \"{}\"", ap_name))
@@ -154,10 +199,10 @@ fn read_config<P: AsRef<Path>>(path: P) -> io::Result<JSONConfig> {
     Ok(json_config)
 }
 
-fn get_health_checks(
-    configs: &HashMap<String, JSONHealthChecks>,
+fn get_healthchecks(
+    configs: &HashMap<String, JSONHealthchecks>,
     checks: &Vec<String>
-    ) -> Result<Vec<Box<HealthCheck>>, String>
+    ) -> Result<Vec<ScheduledHealthcheck>, String>
 {
     let mut result = vec![];
 
@@ -165,8 +210,12 @@ fn get_health_checks(
         match configs.get(check) {
 	    Some(config) => {
 	        for p in config.checks.iter() {
-		    match mk_health_check(p) {
-		        Ok(x) => result.push(x),
+		    match mk_healthcheck(p) {
+		        Ok(x) => result.push(ScheduledHealthcheck {
+			    instant: Instant::now() + Duration::from_secs(config.interval),
+			    interval: Duration::from_secs(config.interval),
+			    healthcheck: x
+			}),
 			Err(e) => return Err(e)
 		    }
 		}
@@ -178,19 +227,49 @@ fn get_health_checks(
     Ok(result)
 }
 
-fn mk_health_check(params: &HashMap<String, Value>)
-    -> Result<Box<HealthCheck>, String> {
+fn mk_healthcheck(params: &HashMap<String, Value>)
+    -> Result<Box<Healthcheck>, String> {
     match params.get("type") {
         Some(Value::String(t)) => {
 	    match t.as_ref() {
-	        "proc" => Ok(Box::new(ProcHealthCheck {process: String::from("str")})),
-	        "df" => Ok(Box::new(DFHealthCheck {device: String::from("f"), free: 256})),
-		"tcp" => Ok(Box::new(TCPHealthCheck {addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080), timeout: 256})),
+	        "proc" => mk_proc_healthcheck(params),
+	        "df" => mk_df_healthcheck(params),
+		"tcp" => mk_tcp_healthcheck(params),
                 _ => Err(format!("Unknown healthcheck type \"{}\"", t))
 	    }
 	},
 	// TODO use serde deserialize_with to catch bad healthchecks
 	Some(t) => Err(format!("Unknown healthcheck type \"{:?}\"", t)),
 	_ => Err(String::from("Healthcheck configuration with no \"type\" field"))
+    }
+}
+
+fn mk_proc_healthcheck(params: &HashMap<String, Value>) -> Result<Box<Healthcheck>, String> {
+    match params.get("proc") {
+        Some(Value::String(p)) => Ok(Box::new(ProcHealthcheck{ process: p.clone() })),
+	_ => Err(String::from("Bad proc healthcheck. Use \"proc\" : \"<process_name>\""))
+    }
+}
+
+fn mk_df_healthcheck(params: &HashMap<String, Value>) -> Result<Box<Healthcheck>, String> {
+    match (params.get("file"), params.get("free")) {
+        (Some(Value::String(file)), Some(Value::Number(free))) if free.is_i64() =>
+	    Ok(Box::new(DfHealthcheck{ file: file.clone(), free: free.as_i64().unwrap() as u64 })),
+	_ => Err(String::from("Bad df healthcheck. Use \"file\" :\"<filename>\", \"free\" : <mb>"))
+    }
+}
+
+fn mk_tcp_healthcheck(params: &HashMap<String, Value>) -> Result<Box<Healthcheck>, String> {
+    match (params.get("addr"), params.get("timeout")) {
+        (Some(Value::String(addr)), Some(Value::Number(timeout))) if timeout.is_i64() => {
+	    match addr.parse() {
+	        Ok(addr) => Ok(Box::new(TcpHealthcheck {
+	            addr: addr,
+		    timeout: Duration::from_secs(timeout.as_i64().unwrap() as u64)
+	        })),
+                _ => Err(String::from("Bad tcp healthcheck. Malformed address"))
+	    }
+	},
+	_ => Err(String::from("Bad tcp healthcheck. Use \"addr\" :\"<address>\", \"timeout\" : <seconds>"))
     }
 }

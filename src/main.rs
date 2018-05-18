@@ -12,8 +12,8 @@ fn main() {
 	None => String::from("./riffol.conf")
     };
 
-    let config = match get_config(config_path) {
-        Ok(c) => c,
+    let mut config = match get_config(config_path) {
+        Ok(mut c) => c,
 	Err(s) => {
 	    println!("{}: {}", arg0, s);
 	    return ();
@@ -33,37 +33,44 @@ fn main() {
 	}
     });
 
-    let (running, failed)
-    : (Vec<Option<&Application>>, Vec<Option<&Application>>)
-    = config.applications.iter().map(|ap| {
-        let result = Command::new(&ap.exec)
-			     .arg(&ap.start)
-	                     .spawn();
-        match result {
-	    Ok(_)  => {
-	        println!("{}: Successfully spawned {}", arg0, ap.exec);
-		Some(ap)
-	    },
-	    Err(_) => {
-	        println!("{}: Failed to spawn {}", arg0, ap.exec);
-	        None
+    {
+        let (running, failed)
+        : (Vec<Option<&Application>>, Vec<Option<&Application>>)
+        = config.applications.iter().map(|ap| {
+            let result = Command::new(&ap.exec)
+	                         .arg(&ap.start)
+	                          .spawn();
+            match result {
+                Ok(_)  => {
+	            println!("{}: Successfully spawned {}", arg0, ap.exec);
+		    Some(ap)
+	        },
+	        Err(_) => {
+	            println!("{}: Failed to spawn {}", arg0, ap.exec);
+	            None
+	        }
 	    }
-	}
-    }).partition(|o| o.is_some());
+        }).partition(|o| o.is_some());
 
-    if failed.len() != 0 {
-        running.iter().rev().map(|o| o.unwrap()).for_each(|ap| {
-            println!("Stopping {}", ap.exec);
-	    Command::new(&ap.exec)
-	            .arg(&ap.stop)
-	            .spawn()
-		    .ok();
-        });
-	return ();
+        if failed.len() != 0 {
+            running.iter().rev().map(|o| o.unwrap()).for_each(|ap| {
+                println!("Stopping {}", ap.exec);
+	        Command::new(&ap.exec)
+	                .arg(&ap.stop)
+	                .spawn()
+		        .ok();
+            });
+	    return ();
+        }
     }
 
     let sleep_duration = time::Duration::from_secs(1);
     loop {
+        for ap in &mut config.applications {
+            for healthcheck in &mut ap.healthchecks {
+	        if !healthcheck.check() {}
+	    }
+	}
         thread::sleep(sleep_duration);
     }
 }
