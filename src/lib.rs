@@ -4,3 +4,4 @@ extern crate serde_json;
 extern crate serde_derive;
 
 pub mod config;
+pub mod health;

@@ -1,9 +1,16 @@
 extern crate riffol;
 
 use riffol::config::{get_config, Application};
+use riffol::health::{HealthCheck, IntervalHealthCheck};
 use std::process::Command;
 use std::{env, thread};
-use std::time::{Instant};
+use std::time::{Instant, Duration};
+
+struct Check<'a> {
+    the_check: &'a IntervalHealthCheck,
+    application: &'a Application,
+    instant: Instant
+}
 
 fn main() {
     let arg0 = env::args().next().unwrap();
@@ -13,7 +20,7 @@ fn main() {
 	None => String::from("./riffol.conf")
     };
 
-    let mut config = match get_config(config_path) {
+    let config = match get_config(config_path) {
         Ok(mut c) => c,
 	Err(s) => {
 	    println!("{}: {}", arg0, s);
@@ -34,13 +41,12 @@ fn main() {
 	}
     });
 
-    {
-        let (running, failed)
+    let (running, failed)
         : (Vec<Option<&Application>>, Vec<Option<&Application>>)
         = config.applications.iter().map(|ap| {
             let result = Command::new(&ap.exec)
-	                         .arg(&ap.start)
-	                          .spawn();
+	        .arg(&ap.start)
+	        .spawn();
             match result {
                 Ok(_)  => {
 	            println!("{}: Successfully spawned {}", arg0, ap.exec);
@@ -53,39 +59,37 @@ fn main() {
 	    }
         }).partition(|o| o.is_some());
 
-        if failed.len() != 0 {
-            running.iter().rev().map(|o| o.unwrap()).for_each(|ap| {
-                println!("Stopping {}", ap.exec);
-	        Command::new(&ap.exec)
-	                .arg(&ap.stop)
-	                .spawn()
-		        .ok();
-            });
-	    return ();
-        }
+    if failed.len() != 0 {
+        running.iter().rev().map(|o| o.unwrap()).for_each(|ap| {
+            println!("Stopping {}", ap.exec);
+	    Command::new(&ap.exec)
+	        .arg(&ap.stop)
+	        .spawn()
+		.ok();
+        });
+	return ();
     }
 
+    // build vector of Checks
+    let mut checks = config.applications.iter().fold(vec![], |mut a, v| {
+        for c in v.health_checks.iter() {
+            a.push(Check{ application: v, the_check: c, instant: Instant::now() + *c.get_interval() });
+        }
+        a
+    });
+
     loop {
-        for ap in &mut config.applications {
-            for health_check in &mut ap.health_checks {
-	        if !health_check.check() {
-		    // TODO: health_checkfail
-		}
-	    }
-	}
-
-	let next_check_instant = config.applications.iter()
-	.fold(vec![], |mut a, ap| {
-	    for c in &ap.health_checks {
-	        a.push(c.get_check_instant());
-	    }
-	    a
-	}).iter().min().unwrap().clone();
-
-	let now = Instant::now();
-
-	if next_check_instant > now {
-            thread::sleep(now - next_check_instant);
-	}
+        let now = Instant::now();
+        match checks.iter_mut().min_by(|x, y| x.instant.cmp(&y.instant)) {
+            Some(check) => {
+                if now <= check.instant {
+                    thread::sleep(check.instant - now);
+                }
+                check.instant += *(check.the_check).get_interval();
+                if !check.the_check.do_check(){
+                }
+            },
+            _ => thread::sleep(Duration::from_secs(1))
+        }
     }
 }

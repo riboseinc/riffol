@@ -4,10 +4,9 @@ use serde_json;
 use serde_json::Value;
 use std::path::Path;
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpStream};
-use std::time::{Duration, Instant};
-use std::process::Command;
 use std::iter::{Iterator};
+use std::time::{Duration};
+use health::{IntervalHealthCheck, HealthCheck, ProcCheck, DfCheck, TcpCheck};
 
 #[derive(Deserialize)]
 struct JSONConfig {
@@ -64,88 +63,7 @@ pub struct Application {
     pub start: String,
     pub stop: String,
     pub restart: String,
-    pub health_checks: Vec<ScheduledHealthCheck>
-}
-
-pub struct ScheduledHealthCheck {
-    instant: Instant,
-    interval: Duration,
-    health_check: Box<HealthCheck>
-}
-
-impl ScheduledHealthCheck {
-    pub fn check(&mut self) -> bool {
-        if Instant::now() < self.instant {
-	   self.instant += self.interval;
-	   return self.health_check.check();
-        }
-	true
-    }
-    pub fn get_check_instant(&self) -> Instant {
-        self.instant
-    }
-}
-
-pub trait HealthCheck {
-    fn check(&self) -> bool;
-}
-
-pub struct DfHealthCheck {
-    file: String,
-    free: u64
-}
-
-impl HealthCheck for DfHealthCheck {
-    fn check(&self) -> bool {
-        fn avail(o: &Vec<u8>) -> Option<u64> {
-	    match String::from_utf8_lossy(o).lines().skip(1).next() {
-	        Some(s) => match s.trim_right_matches('M').parse::<u64>() {
-		    Ok(n)  => Some(n),
-		    Err(_) => None
-		}
-		None    => None
-            }
-	};
-
-        match Command::new("/bin/df")
-	              .arg("-BM")
-		      .arg("--output=avail")
-		      .arg(&self.file)
-		      .output() {
-            Ok(o) => match (o.status.success(), avail(&o.stdout)) {
-	        (true, Some(n)) => self.free < n,
-		_         => false
-	    },
-	    _     => false
-	}
-    }
-}
-
-pub struct ProcHealthCheck {
-    process: String,
-}
-
-impl HealthCheck for ProcHealthCheck {
-    fn check(&self) -> bool {
-        match Command::new("/bin/pidof").arg(&self.process).status() {
-	    Ok(s) if s.success() => true,
-	    _                    => false
-	}
-    }
-}
-
-pub struct TcpHealthCheck {
-    addr: SocketAddr,
-    timeout: Duration
-}
-
-impl HealthCheck for TcpHealthCheck {
-    fn check(&self) -> bool {
-        match TcpStream::connect_timeout(&self.addr, self.timeout) {
-	    Ok(_)  => true,
-	    Err(_) => false
-	}
-    }
+    pub health_checks: Vec<IntervalHealthCheck>
 }
 
 pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
@@ -205,7 +123,7 @@ fn read_config<P: AsRef<Path>>(path: P) -> io::Result<JSONConfig> {
 fn get_health_checks(
     configs: &HashMap<String, JSONHealthChecks>,
     checks: &Vec<String>
-    ) -> Result<Vec<ScheduledHealthCheck>, String>
+    ) -> Result<Vec<IntervalHealthCheck>, String>
 {
     let mut result = vec![];
 
@@ -214,11 +132,9 @@ fn get_health_checks(
 	    Some(config) => {
 	        for p in config.checks.iter() {
 		    match mk_health_check(p) {
-		        Ok(x) => result.push(ScheduledHealthCheck {
-			    instant: Instant::now() + Duration::from_secs(config.interval),
-			    interval: Duration::from_secs(config.interval),
-			    health_check: x
-			}),
+		        Ok(x) => result.push(
+                            IntervalHealthCheck::new(Duration::from_secs(config.interval), x)
+                        ),
 			Err(e) => return Err(e)
 		    }
 		}
@@ -235,44 +151,37 @@ fn mk_health_check(params: &HashMap<String, Value>)
     match params.get("type") {
         Some(Value::String(t)) => {
 	    match t.as_ref() {
-	        "proc" => mk_proc_health_check(params),
-	        "df" => mk_df_health_check(params),
-		"tcp" => mk_tcp_health_check(params),
+	        "proc" => {
+                    match params.get("proc") {
+                        Some(Value::String(p)) => Ok(Box::new(ProcCheck::new(p))),
+	                _ => Err(String::from("Bad proc health_check. Use \"proc\" : \"<process_name>\""))
+                    }
+                },
+                "df" => {
+                    match (params.get("file"), params.get("free")) {
+                        (Some(Value::String(file)), Some(Value::Number(free))) if free.is_i64()
+                            => Ok(Box::new(DfCheck::new(Path::new(file), free.as_i64().unwrap() as u64))),
+                        _   => Err(String::from("Bad df health_check. Use \"file\" :\"<filename>\", \"free\" : <mb>"))
+                    }
+                },
+		"tcp" => {
+                    match (params.get("addr"), params.get("timeout")) {
+                        (Some(Value::String(addr)), Some(Value::Number(timeout))) if timeout.is_i64() => {
+	                    match addr.parse() {
+	                        Ok(addr) => Ok(Box::new(
+                                    TcpCheck::new(&addr, &Duration::from_secs(timeout.as_i64().unwrap() as u64)))
+                                ),
+                                _ => Err(String::from("Bad tcp health_check. Malformed address"))
+                            }
+                        },
+	                _ => Err(String::from("Bad tcp health_check. Use \"addr\" :\"<address>\", \"timeout\" : <seconds>"))
+                    }
+                },
                 _ => Err(format!("Unknown health_check type \"{}\"", t))
 	    }
 	},
 	// TODO use serde deserialize_with to catch bad health_checks
 	Some(t) => Err(format!("Unknown health_check type \"{:?}\"", t)),
 	_ => Err(String::from("Health_Check configuration with no \"type\" field"))
-    }
-}
-
-fn mk_proc_health_check(params: &HashMap<String, Value>) -> Result<Box<HealthCheck>, String> {
-    match params.get("proc") {
-        Some(Value::String(p)) => Ok(Box::new(ProcHealthCheck{ process: p.clone() })),
-	_ => Err(String::from("Bad proc health_check. Use \"proc\" : \"<process_name>\""))
-    }
-}
-
-fn mk_df_health_check(params: &HashMap<String, Value>) -> Result<Box<HealthCheck>, String> {
-    match (params.get("file"), params.get("free")) {
-        (Some(Value::String(file)), Some(Value::Number(free))) if free.is_i64() =>
-	    Ok(Box::new(DfHealthCheck{ file: file.clone(), free: free.as_i64().unwrap() as u64 })),
-	_ => Err(String::from("Bad df health_check. Use \"file\" :\"<filename>\", \"free\" : <mb>"))
-    }
-}
-
-fn mk_tcp_health_check(params: &HashMap<String, Value>) -> Result<Box<HealthCheck>, String> {
-    match (params.get("addr"), params.get("timeout")) {
-        (Some(Value::String(addr)), Some(Value::Number(timeout))) if timeout.is_i64() => {
-	    match addr.parse() {
-	        Ok(addr) => Ok(Box::new(TcpHealthCheck {
-	            addr: addr,
-		    timeout: Duration::from_secs(timeout.as_i64().unwrap() as u64)
-	        })),
-                _ => Err(String::from("Bad tcp health_check. Malformed address"))
-	    }
-	},
-	_ => Err(String::from("Bad tcp health_check. Use \"addr\" :\"<address>\", \"timeout\" : <seconds>"))
     }
 }
