@@ -1,0 +1,9 @@
+[package]
+name = "riffol"
+version = "0.1.0"
+authors = ["John Hedges <john@drystone.co.uk>"]
+
+[dependencies]
+serde = "1.0.0"
+serde_json = "1.0.0"
+serde_derive = "1.0.0"
