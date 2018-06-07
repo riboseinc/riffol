@@ -1,40 +1,39 @@
-use std::io;
-use std::fs::File;
+extern crate nereon;
+
+use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use serde_json;
-use serde_json::Value;
-use std::path::Path;
 use std::collections::HashMap;
 use std::iter::Iterator;
+use std::path::Path;
 use std::time::Duration;
-use health::{IntervalHealthCheck, HealthCheck, ProcCheck, DfCheck, TcpCheck};
 
 #[derive(Deserialize)]
-struct JSONConfig {
-    init: JSONInit,
-    application_groups: HashMap<String, JSONApplicationGroup>,
-    applications: HashMap<String, JSONApplication>,
-    dependencies: HashMap<String, Vec<String>>,
-    #[serde(default = "default_config_health_checks")]
-    health_checks: HashMap<String, JSONHealthChecks>,
+struct JsonConfig {
+    init: HashMap<String, JsonInit>,
+    application_group: HashMap<String, JsonApplicationGroup>,
+    application: HashMap<String, JsonApplication>,
+    dependency: HashMap<String, JsonDependencies>,
+    #[serde(default = "default_config_healthchecks")]
+    healthchecks: HashMap<String, JsonHealthChecks>,
 }
 
-fn default_config_health_checks() -> HashMap<String, JSONHealthChecks> {
+fn default_config_healthchecks() -> HashMap<String, JsonHealthChecks> {
     HashMap::new()
 }
 
 #[derive(Deserialize)]
-struct JSONInit {
+struct JsonInit {
     application_groups: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct JSONApplicationGroup {
+struct JsonApplicationGroup {
     applications: Vec<String>,
     dependencies: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct JSONApplication {
+struct JsonApplication {
     exec: String,
     #[serde(default = "default_application_start")]
     start: String,
@@ -42,101 +41,123 @@ struct JSONApplication {
     stop: String,
     #[serde(default = "default_application_restart")]
     restart: String,
-    health_checks: Option<Vec<String>>,
+    healthchecks: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct JsonDependencies {
+    packages: Vec<String>,
 }
 
 fn default_application_start() -> String {
     "start".to_string()
 }
+
 fn default_application_stop() -> String {
     "stop".to_string()
 }
+
 fn default_application_restart() -> String {
     "restart".to_string()
 }
 
 #[derive(Deserialize)]
-struct JSONHealthChecks {
-    checks: Vec<HashMap<String, Value>>,
+struct JsonHealthChecks {
+    checks: Vec<String>,
+    timeout: u64,
     interval: u64,
 }
 
+#[derive(Debug)]
 pub struct Config {
     pub applications: Vec<Application>,
     pub dependencies: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct Application {
     pub exec: String,
     pub start: String,
     pub stop: String,
     pub restart: String,
-    pub health_checks: Vec<IntervalHealthCheck>,
+    pub healthchecks: Vec<IntervalHealthCheck>,
 }
 
-pub fn get_config<P: AsRef<Path>>(path: P) -> Result<Config, String> {
-    let json_config = match read_config(&path) {
+pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, String> {
+    let options = vec![
+        nereon::Opt::new(
+            "",
+            Some("f"),
+            Some("file"),
+            Some("RIFFOL_CONFIG"),
+            0,
+            None,
+            Some("@{}"),
+            Some("Configuration file"),
+        ),
+    ];
+
+    let json_config = match nereon::nereon_json(options, args) {
         Ok(c) => c,
-        Err(s) => {
-            return Err(format!(
-                "Unable to read config file \"{}\": {}",
-                path.as_ref().display(),
-                s
-            ))
-        }
+        Err(s) => return Err(format!("Couldn't get config: {}", s)),
+    };
+
+    let json_config = match serde_json::from_str::<JsonConfig>(&json_config) {
+        Ok(c) => c,
+        Err(e) => return Err(format!("Invalid config: {}", e)),
     };
 
     let mut config = Config {
         applications: vec![],
         dependencies: vec![],
     };
-    for group_name in json_config.init.application_groups {
-        match json_config.application_groups.get(&group_name) {
-            Some(group) => {
-                for ap_name in &group.applications {
-                    match json_config.applications.get(ap_name) {
-                        Some(ap) => {
-                            let health_checks = match &ap.health_checks {
-                                Some(cs) => {
-                                    match get_health_checks(&json_config.health_checks, &cs) {
-                                        Ok(cs) => cs,
-                                        Err(e) => return Err(e),
+
+    for (_, init) in json_config.init {
+        for group_name in init.application_groups {
+            match json_config.application_group.get(&group_name) {
+                Some(group) => {
+                    for ap_name in &group.applications {
+                        match json_config.application.get(ap_name) {
+                            Some(ap) => {
+                                let healthchecks = match &ap.healthchecks {
+                                    Some(cs) => {
+                                        match get_healthchecks(&json_config.healthchecks, &cs) {
+                                            Ok(cs) => cs,
+                                            Err(e) => return Err(e),
+                                        }
                                     }
-                                }
-                                None => vec![],
-                            };
-                            config.applications.push(Application {
-                                exec: ap.exec.clone(),
-                                start: ap.start.clone(),
-                                stop: ap.stop.clone(),
-                                restart: ap.restart.clone(),
-                                health_checks: health_checks,
-                            })
+                                    None => vec![],
+                                };
+                                config.applications.push(Application {
+                                    exec: ap.exec.clone(),
+                                    start: ap.start.clone(),
+                                    stop: ap.stop.clone(),
+                                    restart: ap.restart.clone(),
+                                    healthchecks: healthchecks,
+                                })
+                            }
+                            None => return Err(format!("No such application \"{}\"", ap_name)),
                         }
-                        None => return Err(format!("No such application \"{}\"", ap_name)),
+                    }
+                    for dep_name in &group.dependencies {
+                        match json_config.dependency.get(dep_name) {
+                            Some(dep) => dep.packages
+                                .iter()
+                                .for_each(|d| config.dependencies.push(d.clone())),
+                            None => return Err(format!("No such dependencies \"{}\"", dep_name)),
+                        }
                     }
                 }
-                for dep_name in &group.dependencies {
-                    match json_config.dependencies.get(dep_name) {
-                        Some(dep) => dep.iter().for_each(|d| config.dependencies.push(d.clone())),
-                        None => return Err(format!("No such dependencies \"{}\"", dep_name)),
-                    }
-                }
+                None => return Err(format!("No such application_group \"{}\"", group_name)),
             }
-            None => return Err(format!("No such application_group \"{}\"", group_name)),
         }
     }
 
     Ok(config)
 }
 
-fn read_config<P: AsRef<Path>>(path: P) -> io::Result<JSONConfig> {
-    let json_config = serde_json::from_reader(File::open(path)?)?;
-    Ok(json_config)
-}
-
-fn get_health_checks(
-    configs: &HashMap<String, JSONHealthChecks>,
+fn get_healthchecks(
+    configs: &HashMap<String, JsonHealthChecks>,
     checks: &Vec<String>,
 ) -> Result<Vec<IntervalHealthCheck>, String> {
     let mut result = vec![];
@@ -145,75 +166,86 @@ fn get_health_checks(
         match configs.get(check) {
             Some(config) => {
                 for p in config.checks.iter() {
-                    match mk_health_check(p) {
-                        Ok(x) => {
-                            result.push(IntervalHealthCheck::new(
-                                Duration::from_secs(config.interval),
-                                x,
-                            ))
-                        }
+                    match mk_healthcheck(p) {
+                        Ok(x) => result.push(IntervalHealthCheck::new(
+                            Duration::from_secs(config.interval),
+                            Duration::from_secs(config.timeout),
+                            x,
+                        )),
                         Err(e) => return Err(e),
                     }
                 }
             }
-            None => return Err(format!("No such health_check \"{}\"", check)),
+            None => return Err(format!("No such healthcheck \"{}\"", check)),
         }
     }
 
     Ok(result)
 }
 
-fn mk_health_check(params: &HashMap<String, Value>) -> Result<Box<HealthCheck>, String> {
-    match params.get("type") {
-        Some(Value::String(t)) => {
-            match t.as_ref() {
-                "proc" => {
-                    match params.get("proc") {
-                        Some(Value::String(p)) => Ok(Box::new(ProcCheck::new(p))),
-                        _ => Err(String::from(
-                            "Bad proc health_check. \
-                             Use \"proc\" : \"<process_name>\"",
-                        )),
+fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
+    let split2 = |p, s: &str| {
+        let svec: Vec<&str> = s.splitn(2, p).collect();
+        match (svec.get(0), svec.get(1)) {
+            (Some(&s1), Some(&s2)) => (s1.to_owned(), s2.to_owned()),
+            _ => (s.to_owned(), "".to_owned())
+        }
+    };
+
+    let (check, args) = split2("://", params);
+    let bad = |u| Err(format!("Bad {0} healthcheck. Use \"{0}//{1}\"", check, u));
+    match check.as_ref() {
+        "proc" => match args {
+            ref s if s.len() > 0 => Ok(HealthCheck::ProcCheck(ProcCheck::new(&args))),
+            _ => bad("<process>")
+        }
+        "df" => {
+            let bad_df = || bad("<file>:<free>");
+            match split2(":", &args) {
+                (ref file, ref free) if file.len() > 0 => {
+                    match free.parse() {
+                        Ok(n) => Ok(HealthCheck::DfCheck(DfCheck::new(Path::new(&file), n))),
+                        _ => bad_df(),
                     }
-                }
-                "df" => {
-                    match (params.get("file"), params.get("free")) {
-                        (Some(Value::String(file)), Some(Value::Number(free))) if free.is_i64() => {
-                            Ok(Box::new(
-                                DfCheck::new(Path::new(file), free.as_i64().unwrap() as u64),
-                            ))
-                        }
-                        _ => Err(String::from(
-                            "Bad df health_check. \
-                             Use \"file\" :\"<filename>\", \"free\" : <mb>",
-                        )),
-                    }
-                }
-                "tcp" => {
-                    match (params.get("addr"), params.get("timeout")) {
-                        (Some(Value::String(addr)), Some(Value::Number(timeout)))
-                            if timeout.is_i64() => {
-                            match addr.parse() {
-                                Ok(addr) => Ok(Box::new(TcpCheck::new(
-                                    &addr,
-                                    &Duration::from_secs(timeout.as_i64().unwrap() as u64),
-                                ))),
-                                _ => Err(String::from("Bad tcp health_check. Malformed address")),
-                            }
-                        }
-                        _ => Err(String::from(
-                            "Bad tcp health_check. \
-                             Use \"addr\" :\"<address>\", \"timeout\" : <seconds>",
-                        )),
-                    }
-                }
-                _ => Err(format!("Unknown health_check type \"{}\"", t)),
+                },
+                _ => bad_df(),
             }
         }
-        // TODO use serde deserialize_with to catch bad health_checks
-        Some(t) => Err(format!("Unknown health_check type \"{:?}\"", t)),
-        _ => Err(String::from(
-            "Health_Check configuration with no \"type\" field",
-        )),
+        "tcp" => match args.parse() {
+            Ok(addr) => Ok(HealthCheck::TcpCheck(TcpCheck::new(&addr))),
+            _ => bad("<ip-address>"),
+        }
+        p => Err(format!("Unknown healthcheck type {}", p)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mk_healthcheck;
+
+    #[test]
+    fn test() {
+        let args = vec!["-f", "riffol.conf"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let config = super::get_config(args);
+        println!("{:?}", config);
+        assert!(config.is_ok());
+
+        // test mk_healthcheck
+        assert!(mk_healthcheck("unknown").is_err());
+        assert!(mk_healthcheck("").is_err());
+        assert!(mk_healthcheck("tcp").is_err());
+        assert!(mk_healthcheck("tcp://").is_err());
+        assert!(mk_healthcheck("tcp://invalid").is_err());
+        assert!(mk_healthcheck("tcp://127.0.0.1:80").is_ok());
+        assert!(mk_healthcheck("df://").is_err());
+        assert!(mk_healthcheck("df:///dev/sda").is_err());
+        assert!(mk_healthcheck("df:///dev/sda:nan").is_err());
+        assert!(mk_healthcheck("df:///dev/sda:2.0").is_err());
+        assert!(mk_healthcheck("df:///dev/sda:100").is_ok());
+        assert!(mk_healthcheck("proc://").is_err());
+        assert!(mk_healthcheck("proc://anything").is_ok());
     }
 }
