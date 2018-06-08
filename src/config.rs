@@ -1,3 +1,26 @@
+// Copyright (c) 2018, [Ribose Inc](https://www.ribose.com).
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+// 1. Redistributions of source code must retain the above copyright
+//    notice, this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NO/T
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 extern crate nereon;
 
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
@@ -188,7 +211,7 @@ fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
         let svec: Vec<&str> = s.splitn(2, p).collect();
         match (svec.get(0), svec.get(1)) {
             (Some(&s1), Some(&s2)) => (s1.to_owned(), s2.to_owned()),
-            _ => (s.to_owned(), "".to_owned())
+            _ => (s.to_owned(), "".to_owned()),
         }
     };
 
@@ -197,16 +220,14 @@ fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
     match check.as_ref() {
         "proc" => match args {
             ref s if s.len() > 0 => Ok(HealthCheck::ProcCheck(ProcCheck::new(&args))),
-            _ => bad("<process>")
-        }
+            _ => bad("<process>"),
+        },
         "df" => {
             let bad_df = || bad("<file>:<free>");
             match split2(":", &args) {
-                (ref file, ref free) if file.len() > 0 => {
-                    match free.parse() {
-                        Ok(n) => Ok(HealthCheck::DfCheck(DfCheck::new(Path::new(&file), n))),
-                        _ => bad_df(),
-                    }
+                (ref file, ref free) if file.len() > 0 => match free.parse() {
+                    Ok(n) => Ok(HealthCheck::DfCheck(DfCheck::new(Path::new(&file), n))),
+                    _ => bad_df(),
                 },
                 _ => bad_df(),
             }
@@ -214,7 +235,7 @@ fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
         "tcp" => match args.parse() {
             Ok(addr) => Ok(HealthCheck::TcpCheck(TcpCheck::new(&addr))),
             _ => bad("<ip-address>"),
-        }
+        },
         p => Err(format!("Unknown healthcheck type {}", p)),
     }
 }

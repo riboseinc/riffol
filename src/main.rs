@@ -1,29 +1,52 @@
+// Copyright (c) 2018, [Ribose Inc](https://www.ribose.com).
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+// 1. Redistributions of source code must retain the above copyright
+//    notice, this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NO/T
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+extern crate chan_signal;
 extern crate riffol;
 
-use riffol::config::{get_config, Application};
-use riffol::health::{IntervalHealthCheck};
+use chan_signal::Signal;
+use riffol::config::{get_config, Config};
+use riffol::init::Init;
+use std::env;
 use std::process::Command;
-use std::time::{Duration, Instant};
-use std::{env, thread};
-
-struct Check<'a> {
-    the_check: &'a IntervalHealthCheck,
-    application: &'a Application,
-    instant: Instant,
-}
 
 fn main() {
     let arg0 = env::args().next().unwrap();
 
-    let config = match get_config(env::args()) {
-        Ok(mut c) => c,
+    let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
+
+    let Config {
+        applications: apps,
+        dependencies: deps,
+    } = match get_config(env::args()) {
+        Ok(c) => c,
         Err(s) => {
-            println!("{}: {}", arg0, s);
+            eprintln!("{}: {}", arg0, s);
             return ();
         }
     };
 
-    config.dependencies.iter().for_each(|d| {
+    deps.iter().for_each(|d| {
         let result = Command::new("apt-get")
             .arg("-y")
             .arg("--no-install-recommends")
@@ -31,60 +54,20 @@ fn main() {
             .arg(d)
             .status();
         if result.is_err() || !result.unwrap().success() {
-            println!("{}: Failed to install dependency \"{}\"", arg0, d);
+            eprintln!("{}: Failed to install dependency \"{}\"", arg0, d);
             return ();
         }
     });
 
-    let (running, failed): (Vec<Option<&Application>>, Vec<Option<&Application>>) = config
-        .applications
-        .iter()
-        .map(|ap| {
-            let result = Command::new(&ap.exec).arg(&ap.start).spawn();
-            match result {
-                Ok(_) => {
-                    println!("{}: Successfully spawned {}", arg0, ap.exec);
-                    Some(ap)
-                }
-                Err(_) => {
-                    println!("{}: Failed to spawn {}", arg0, ap.exec);
-                    None
-                }
+    let mut init = Init::new(apps);
+    match init.start() {
+        Ok(_) => match signal.recv() {
+            Some(s) => {
+                eprintln!("{}: Received signal {:?}", arg0, s);
+                init.stop();
             }
-        })
-        .partition(|o| o.is_some());
-
-    if failed.len() != 0 {
-        running.iter().rev().map(|o| o.unwrap()).for_each(|ap| {
-            println!("Stopping {}", ap.exec);
-            Command::new(&ap.exec).arg(&ap.stop).spawn().ok();
-        });
-        return ();
-    }
-
-    // build vector of Checks
-    let mut checks = config.applications.iter().fold(vec![], |mut a, v| {
-        for c in v.healthchecks.iter() {
-            a.push(Check {
-                application: v,
-                the_check: c,
-                instant: Instant::now() + c.interval,
-            });
-        }
-        a
-    });
-
-    loop {
-        let now = Instant::now();
-        match checks.iter_mut().min_by(|x, y| x.instant.cmp(&y.instant)) {
-            Some(check) => {
-                if now <= check.instant {
-                    thread::sleep(check.instant - now);
-                }
-                check.instant += check.the_check.interval;
-                if !check.the_check.do_check() {}
-            }
-            _ => thread::sleep(Duration::from_secs(1)),
-        }
+            None => (),
+        },
+        Err(s) => eprintln!("{}: {}", arg0, s),
     }
 }
