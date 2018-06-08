@@ -1,9 +1,6 @@
 #!/bin/sh
 
-STASH_NAME="pre-commit-$(date +%s)"
-git stash save -q --keep-index $STASH_NAME
-
-$result = 0
+result=0
 
 for file in $(git diff --name-only --cached); do
     case $file in
@@ -11,15 +8,10 @@ for file in $(git diff --name-only --cached); do
 	    rustfmt --skip-children --write-mode=diff $file
 	    if [ $? != 0 ]; then
 		echo ${file} needs formatting before commit
-		$result = 1
+		result=1
 	    fi
 	    ;;
     esac
 done
-
-STASHES=$(git stash list)
-if [[ $STASHES == "$STASH_NAME" ]]; then
-  git stash pop -q
-fi
 
 exit $result
