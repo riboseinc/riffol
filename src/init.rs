@@ -22,9 +22,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use config;
-use health::IntervalHealthCheck;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Instant;
 use std::{env, thread};
 
 #[derive(PartialEq)]
@@ -37,16 +37,45 @@ enum AppState {
 struct Application {
     config: config::Application,
     state: AppState,
+    checks: Vec<thread::JoinHandle<()>>,
+}
+
+impl Application {
+    fn start(&mut self) -> bool {
+        let arg0 = env::args().next().unwrap();
+
+        match Command::new(&self.config.exec)
+            .arg(&self.config.start)
+            .spawn()
+        {
+            Ok(mut child) => match child.wait() {
+                Ok(s) if s.success() => {
+                    eprintln!("{}: Successfully spawned {}", arg0, self.config.exec);
+                    self.state = AppState::Running;
+                    true
+                }
+                _ => {
+                    eprintln!(
+                        "{}: Application exited with error {}",
+                        arg0, self.config.exec
+                    );
+                    self.state = AppState::Failed;
+                    false
+                }
+            },
+            Err(_) => {
+                eprintln!("{}: Failed to spawn {}", arg0, self.config.exec);
+                self.state = AppState::Failed;
+                false
+            }
+        }
+    }
 }
 
 pub struct Init {
-    applications: Vec<Application>,
-}
-
-struct Check<'a> {
-    the_check: &'a IntervalHealthCheck,
-    application: &'a Application,
-    instant: Instant,
+    applications: Vec<Arc<Mutex<Application>>>,
+    thread: Option<thread::JoinHandle<()>>,
+    fail_tx: Option<mpsc::Sender<Arc<Mutex<Application>>>>,
 }
 
 impl Init {
@@ -55,73 +84,73 @@ impl Init {
             applications: {
                 configs
                     .drain(..)
-                    .map(|c| Application {
-                        config: c,
-                        state: AppState::Stopped,
+                    .map(|c| {
+                        Arc::new(Mutex::new(Application {
+                            config: c,
+                            state: AppState::Stopped,
+                            checks: vec![],
+                        }))
                     })
                     .collect()
             },
+            thread: None,
+            fail_tx: None,
         }
     }
 
     pub fn start(&mut self) -> Result<(), String> {
-        let arg0 = env::args().next().unwrap();
+        if let Some(_) = self.thread {
+            return Err("Attempt to to call start on already running init.".to_owned());
+        }
 
-        for mut ap in self.applications.iter_mut() {
-            match Command::new(&ap.config.exec).arg(&ap.config.start).spawn() {
-                Ok(mut child) => match child.wait() {
-                    Ok(s) if s.success() => {
-                        eprintln!("{}: Successfully spawned {}", arg0, ap.config.exec);
-                        ap.state = AppState::Running;
-                    }
-                    _ => {
-                        eprintln!("{}: Application exited with error {}", arg0, ap.config.exec);
-                        ap.state = AppState::Failed;
-                    }
-                },
-                Err(_) => {
-                    eprintln!("{}: Failed to spawn {}", arg0, ap.config.exec);
-                    ap.state = AppState::Failed;
-                    break;
-                }
+        let (tx, rx) = mpsc::channel::<Arc<Mutex<Application>>>();
+        self.fail_tx = Some(tx);
+        self.thread = thread::Builder::new()
+            .spawn(move || for ap in rx.iter() {})
+            .ok();
+
+        if let None = self.thread {
+            return Err("Failed to start the init thread.".to_owned());
+        }
+
+        // start the applications
+        for ap_mutex in self.applications.iter() {
+            let ref mut ap = ap_mutex.lock().unwrap();
+            if !ap.start() {
+                break;
             }
+            // start healtcheck threads
+            ap.checks = ap.config
+                .healthchecks
+                .iter()
+                .map(|c| {
+                    let am = Arc::clone(&ap_mutex);
+                    let check = c.clone();
+                    let tx = self.fail_tx.iter().next().unwrap().clone();
+                    thread::Builder::new()
+                        .spawn(move || {
+                            let mut next = Instant::now() + check.interval;
+                            loop {
+                                thread::sleep(next - Instant::now());
+                                next += check.interval;
+                                if !check.do_check() {
+                                    let _t = tx.send(Arc::clone(&am));
+                                }
+                            }
+                        })
+                        .unwrap()
+                })
+                .collect();
         }
 
         if !self.applications
             .iter()
-            .all(|a| a.state == AppState::Running)
+            .all(|a| a.lock().unwrap().state == AppState::Running)
         {
             self.stop();
             return Err("Some applications failed to start".to_owned());
         }
 
-        // build vector of Checks
-        let mut checks = self.applications.iter().fold(vec![], |mut a, v| {
-            for c in v.config.healthchecks.iter() {
-                a.push(Check {
-                    application: v,
-                    the_check: c,
-                    instant: Instant::now() + c.interval,
-                });
-            }
-            a
-        });
-
-        /*
-        loop {
-            let now = Instant::now();
-            match checks.iter_mut().min_by(|x, y| x.instant.cmp(&y.instant)) {
-                Some(check) => {
-                    if now <= check.instant {
-                        thread::sleep(check.instant - now);
-                    }
-                    check.instant += check.the_check.interval;
-                    if !check.the_check.do_check() {}
-                }
-                _ => thread::sleep(Duration::from_secs(1)),
-            }
-        }
-         */
         Ok(())
     }
 
@@ -130,9 +159,10 @@ impl Init {
 
         for ap in self.applications
             .iter_mut()
-            .filter(|a| a.state == AppState::Running)
+            .filter(|a| a.lock().unwrap().state == AppState::Running)
             .rev()
         {
+            let ap = ap.lock().unwrap();
             eprintln!("{}: Stopping {}", arg0, ap.config.exec);
             let _result = Command::new(&ap.config.exec)
                 .arg(&ap.config.stop)

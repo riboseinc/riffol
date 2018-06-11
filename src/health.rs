@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HealthCheck {
     DfCheck(DfCheck),
     ProcCheck(ProcCheck),
@@ -43,11 +43,11 @@ impl HealthCheck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IntervalHealthCheck {
     pub interval: Duration,
     pub timeout: Duration,
-    the_check: HealthCheck,
+    pub the_check: HealthCheck,
 }
 
 impl IntervalHealthCheck {
@@ -64,7 +64,7 @@ impl IntervalHealthCheck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DfCheck {
     free: u64,
     path: PathBuf,
@@ -104,7 +104,7 @@ impl DfCheck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProcCheck {
     process: String,
 }
@@ -124,7 +124,7 @@ impl ProcCheck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TcpCheck {
     addr: SocketAddr,
 }
