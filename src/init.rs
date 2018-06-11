@@ -92,8 +92,13 @@ impl Init {
                             loop {
                                 thread::sleep(next - Instant::now());
                                 next += check.interval;
-                                if !check.do_check() {
-                                    let _t = tx.send(Arc::clone(&am));
+                                log(format!("{}.", check.to_string()));
+                                match check.do_check() {
+                                    Ok(_) => (),
+                                    Err(e) => {
+                                        log(format!("{}. {}.", check.to_string(), e));
+                                        let _t = tx.send(Arc::clone(&am));
+                                    }
                                 }
                             }
                         })
