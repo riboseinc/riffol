@@ -42,29 +42,27 @@ struct Application {
 
 impl Application {
     fn start(&mut self) -> bool {
-        let arg0 = env::args().next().unwrap();
-
         match Command::new(&self.config.exec)
             .arg(&self.config.start)
             .spawn()
         {
             Ok(mut child) => match child.wait() {
                 Ok(s) if s.success() => {
-                    eprintln!("{}: Successfully spawned {}", arg0, self.config.exec);
+                    log(format!("Successfully spawned {}", self.config.exec));
                     self.state = AppState::Running;
                     true
                 }
                 _ => {
-                    eprintln!(
-                        "{}: Application exited with error {}",
-                        arg0, self.config.exec
-                    );
+                    log(format!(
+                        "Application exited with error {}",
+                        self.config.exec
+                    ));
                     self.state = AppState::Failed;
                     false
                 }
             },
             Err(_) => {
-                eprintln!("{}: Failed to spawn {}", arg0, self.config.exec);
+                log(format!("Failed to spawn {}", self.config.exec));
                 self.state = AppState::Failed;
                 false
             }
@@ -133,8 +131,13 @@ impl Init {
                             loop {
                                 thread::sleep(next - Instant::now());
                                 next += check.interval;
-                                if !check.do_check() {
-                                    let _t = tx.send(Arc::clone(&am));
+                                log(format!("{}.", check.to_string()));
+                                match check.do_check() {
+                                    Ok(_) => (),
+                                    Err(e) => {
+                                        log(format!("{}. {}.", check.to_string(), e));
+                                        let _t = tx.send(Arc::clone(&am));
+                                    }
                                 }
                             }
                         })
@@ -155,19 +158,22 @@ impl Init {
     }
 
     pub fn stop(&mut self) {
-        let arg0 = env::args().next().unwrap();
-
         for ap in self.applications
             .iter_mut()
             .filter(|a| a.lock().unwrap().state == AppState::Running)
             .rev()
         {
             let ap = ap.lock().unwrap();
-            eprintln!("{}: Stopping {}", arg0, ap.config.exec);
+            log(format!("Stopping {}", ap.config.exec));
             let _result = Command::new(&ap.config.exec)
                 .arg(&ap.config.stop)
                 .spawn()
                 .and_then(|mut c| c.wait());
         }
     }
+}
+
+fn log(s: String) {
+    let arg0 = env::args().next().unwrap();
+    eprintln!("{}: {}", arg0, s);
 }

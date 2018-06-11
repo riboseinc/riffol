@@ -24,6 +24,8 @@
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -34,11 +36,19 @@ pub enum HealthCheck {
 }
 
 impl HealthCheck {
-    pub fn do_check(&self) -> bool {
+    pub fn do_check(&self) -> Result<(), String> {
         match self {
             HealthCheck::DfCheck(s) => s.do_check(),
             HealthCheck::ProcCheck(s) => s.do_check(),
             HealthCheck::TcpCheck(s) => s.do_check(),
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        match self {
+            HealthCheck::DfCheck(s) => s.to_string(),
+            HealthCheck::ProcCheck(s) => s.to_string(),
+            HealthCheck::TcpCheck(s) => s.to_string(),
         }
     }
 }
@@ -59,8 +69,20 @@ impl IntervalHealthCheck {
         }
     }
 
-    pub fn do_check(&self) -> bool {
-        self.the_check.do_check()
+    pub fn to_string(&self) -> String {
+        self.the_check.to_string()
+    }
+
+    pub fn do_check(&self) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
+        let check = self.the_check.clone();
+        thread::spawn(move || {
+            let _t = tx.send(check.do_check());
+        });
+        match rx.recv_timeout(self.timeout) {
+            Ok(res) => res,
+            Err(_) => Err(format!("Timeout")),
+        }
     }
 }
 
@@ -78,7 +100,11 @@ impl DfCheck {
         }
     }
 
-    fn do_check(&self) -> bool {
+    fn to_string(&self) -> String {
+        format!("DF healthcheck, min {}MB for {:?}", self.free, self.path)
+    }
+
+    fn do_check(&self) -> Result<(), String> {
         fn avail(o: &Vec<u8>) -> Option<u64> {
             match String::from_utf8_lossy(o).lines().skip(1).next() {
                 Some(s) => match s.trim_right_matches('M').parse::<u64>() {
@@ -89,6 +115,7 @@ impl DfCheck {
             }
         };
 
+        let fail = "Failed to get free space";
         match Command::new("/bin/df")
             .arg("-BM")
             .arg("--output=avail")
@@ -96,10 +123,11 @@ impl DfCheck {
             .output()
         {
             Ok(o) => match (o.status.success(), avail(&o.stdout)) {
-                (true, Some(n)) => self.free < n,
-                _ => false,
+                (true, Some(n)) if n >= self.free => Ok(()),
+                (true, Some(n)) => Err(format!("{}MB free", n,)),
+                _ => Err(fail.to_owned()),
             },
-            _ => false,
+            _ => Err(fail.to_owned()),
         }
     }
 }
@@ -116,10 +144,14 @@ impl ProcCheck {
         }
     }
 
-    fn do_check(&self) -> bool {
+    fn to_string(&self) -> String {
+        format!("Proc healthcheck, checking for {}", self.process)
+    }
+
+    fn do_check(&self) -> Result<(), String> {
         match Command::new("/bin/pidof").arg(&self.process).status() {
-            Ok(s) if s.success() => true,
-            _ => false,
+            Ok(s) if s.success() => Ok(()),
+            _ => Err("No such process".to_owned()),
         }
     }
 }
@@ -136,10 +168,14 @@ impl TcpCheck {
         }
     }
 
-    fn do_check(&self) -> bool {
+    fn to_string(&self) -> String {
+        format!("TCP healthcheck, connect to {:?}", self.addr)
+    }
+
+    fn do_check(&self) -> Result<(), String> {
         match TcpStream::connect(&self.addr) {
-            Ok(_) => true,
-            Err(_) => false,
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed ({})", e)),
         }
     }
 }
