@@ -25,7 +25,7 @@ use application::{AppAction, AppState, Application};
 use std::sync::{mpsc, Arc, Mutex};
 use std::{env, thread};
 
-pub type AppMutex = Arc<Mutex<Application>>;
+type AppMutex = Arc<Mutex<Application>>;
 
 pub struct Init {
     applications: Vec<AppMutex>,

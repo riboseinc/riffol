@@ -22,10 +22,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use health::IntervalHealthCheck;
-use init::AppMutex;
 use std::env;
 use std::process::Command;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
@@ -91,17 +90,17 @@ impl Application {
             .and_then(|mut c| c.wait());
     }
 
-    pub fn spawn_check_threads(
+    pub fn spawn_check_threads<T: Send + Sync + Clone + 'static>(
         &mut self,
-        fail_tx: mpsc::Sender<Option<AppMutex>>,
-        fail_msg: AppMutex,
+        fail_tx: mpsc::Sender<Option<T>>,
+        fail_msg: T,
     ) -> () {
         self.checks = self.healthchecks
             .iter()
             .map(|c| {
                 let check = c.clone();
                 let fail_tx = fail_tx.clone();
-                let fail_msg = Arc::clone(&fail_msg);
+                let fail_msg = fail_msg.clone();
                 let (tx, rx) = mpsc::channel();
                 let h = thread::spawn(move || {
                     let mut next = Instant::now() + check.interval;
@@ -120,7 +119,7 @@ impl Application {
                                     Ok(_) => (),
                                     Err(e) => {
                                         log(format!("{}. {}.", check.to_string(), e));
-                                        let _t = fail_tx.send(Some(Arc::clone(&fail_msg)));
+                                        let _t = fail_tx.send(Some(fail_msg.clone()));
                                     }
                                 }
                             }
