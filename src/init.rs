@@ -78,33 +78,6 @@ impl Init {
             } else {
                 break;
             }
-            // start healtcheck threads
-            ap.checks = ap.config
-                .healthchecks
-                .iter()
-                .map(|c| {
-                    let am = Arc::clone(&ap_mutex);
-                    let check = c.clone();
-                    let tx = self.fail_tx.iter().next().unwrap().clone();
-                    thread::Builder::new()
-                        .spawn(move || {
-                            let mut next = Instant::now() + check.interval;
-                            loop {
-                                thread::sleep(next - Instant::now());
-                                next += check.interval;
-                                log(format!("{}.", check.to_string()));
-                                match check.do_check() {
-                                    Ok(_) => (),
-                                    Err(e) => {
-                                        log(format!("{}. {}.", check.to_string(), e));
-                                        let _t = tx.send(Arc::clone(&am));
-                                    }
-                                }
-                            }
-                        })
-                        .unwrap()
-                })
-                .collect();
         }
 
         if !self.applications
