@@ -24,6 +24,7 @@
 extern crate nereon;
 
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
+use init;
 use serde_json;
 use std::collections::HashMap;
 use std::iter::Iterator;
@@ -65,6 +66,7 @@ struct JsonApplication {
     #[serde(default = "default_application_restart")]
     restart: String,
     healthchecks: Option<Vec<String>>,
+    healthcheckfail: init::HealthCheckFail,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +106,7 @@ pub struct Application {
     pub stop: String,
     pub restart: String,
     pub healthchecks: Vec<IntervalHealthCheck>,
+    pub healthcheckfail: init::HealthCheckFail,
 }
 
 pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, String> {
@@ -157,6 +160,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, Str
                                     stop: ap.stop.clone(),
                                     restart: ap.restart.clone(),
                                     healthchecks: healthchecks,
+                                    healthcheckfail: ap.healthcheckfail.clone(),
                                 })
                             }
                             None => return Err(format!("No such application \"{}\"", ap_name)),
