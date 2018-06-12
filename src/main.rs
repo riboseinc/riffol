@@ -25,7 +25,7 @@ extern crate chan_signal;
 extern crate riffol;
 
 use chan_signal::Signal;
-use riffol::config::{get_config, Config};
+use riffol::config::{get_config, Riffol};
 use riffol::init::Init;
 use std::env;
 use std::process::Command;
@@ -35,7 +35,7 @@ fn main() {
 
     let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
 
-    let Config {
+    let Riffol {
         applications: apps,
         dependencies: deps,
     } = match get_config(env::args()) {

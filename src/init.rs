@@ -21,127 +21,11 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use config;
-use std::process::Command;
+use application::{AppAction, AppState, Application};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Instant;
 use std::{env, thread};
 
-#[derive(PartialEq)]
-enum AppState {
-    Running,
-    Failed,
-    Stopped,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(field_identifier, rename_all = "lowercase")]
-pub enum HealthCheckFail {
-    Restart,
-}
-
-struct Application {
-    config: config::Application,
-    state: AppState,
-    checks: Vec<(mpsc::Sender<()>, thread::JoinHandle<()>)>,
-}
-
-type AppMutex = Arc<Mutex<Application>>;
-
-impl Application {
-    fn start(&mut self) -> bool {
-        match Command::new(&self.config.exec)
-            .arg(&self.config.start)
-            .spawn()
-        {
-            Ok(mut child) => match child.wait() {
-                Ok(s) if s.success() => {
-                    log(format!("Successfully spawned {}", self.config.exec));
-                    self.state = AppState::Running;
-                    true
-                }
-                _ => {
-                    log(format!(
-                        "Application exited with error {}",
-                        self.config.exec
-                    ));
-                    self.state = AppState::Failed;
-                    false
-                }
-            },
-            Err(_) => {
-                log(format!("Failed to spawn {}", self.config.exec));
-                self.state = AppState::Failed;
-                false
-            }
-        }
-    }
-
-    fn stop(&self) {
-        let _result = Command::new(&self.config.exec)
-            .arg(&self.config.stop)
-            .spawn()
-            .and_then(|mut c| c.wait());
-    }
-
-    fn restart(&self) {
-        let _result = Command::new(&self.config.exec)
-            .arg(&self.config.restart)
-            .spawn()
-            .and_then(|mut c| c.wait());
-    }
-
-    fn spawn_check_threads(
-        &mut self,
-        fail_tx: mpsc::Sender<Option<AppMutex>>,
-        fail_msg: AppMutex,
-    ) -> () {
-        self.checks = self.config
-            .healthchecks
-            .iter()
-            .map(|c| {
-                let check = c.clone();
-                let fail_tx = fail_tx.clone();
-                let fail_msg = Arc::clone(&fail_msg);
-                let (tx, rx) = mpsc::channel();
-                let h = thread::Builder::new()
-                    .spawn(move || {
-                        let mut next = Instant::now() + check.interval;
-                        loop {
-                            match rx.recv_timeout(next - Instant::now()) {
-                                // Ok(()) means we received the 'kill' message
-                                Ok(()) => {
-                                    log(format!("Cancelling {}.", check.to_string()));
-                                    break;
-                                }
-                                // otherwise we timeout so proceed with the check
-                                _ => {
-                                    next += check.interval;
-                                    log(format!("{}.", check.to_string()));
-                                    match check.do_check() {
-                                        Ok(_) => (),
-                                        Err(e) => {
-                                            log(format!("{}. {}.", check.to_string(), e));
-                                            let _t = fail_tx.send(Some(Arc::clone(&fail_msg)));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    })
-                    .unwrap();
-                (tx, h)
-            })
-            .collect();
-    }
-
-    fn stop_check_threads(&mut self) {
-        for (tx, h) in self.checks.drain(..) {
-            tx.send(());
-            h.join();
-        }
-    }
-}
+pub type AppMutex = Arc<Mutex<Application>>;
 
 pub struct Init {
     applications: Vec<AppMutex>,
@@ -150,17 +34,17 @@ pub struct Init {
 }
 
 impl Init {
-    pub fn new(mut configs: Vec<config::Application>) -> Result<Init, String> {
+    pub fn new(mut applications: Vec<Application>) -> Result<Init, String> {
         let (tx, rx) = mpsc::channel::<Option<AppMutex>>();
         let h = {
             let tx = tx.clone();
-            thread::Builder::new().spawn(move || {
+            thread::spawn(move || {
                 for msg in rx.iter() {
                     match msg {
                         Some(ap_mutex) => {
                             let mut ap = ap_mutex.lock().unwrap();
-                            match ap.config.healthcheckfail {
-                                HealthCheckFail::Restart => {
+                            match ap.healthcheckfail {
+                                AppAction::Restart => {
                                     ap.stop_check_threads();
                                     ap.restart();
                                     ap.spawn_check_threads(tx.clone(), Arc::clone(&ap_mutex));
@@ -171,21 +55,13 @@ impl Init {
                     }
                 }
             })
-        }.unwrap();
+        };
 
         Ok(Init {
-            applications: {
-                configs
-                    .drain(..)
-                    .map(|c| {
-                        Arc::new(Mutex::new(Application {
-                            config: c,
-                            state: AppState::Stopped,
-                            checks: vec![],
-                        }))
-                    })
-                    .collect()
-            },
+            applications: applications
+                .drain(..)
+                .map(|app| Arc::new(Mutex::new(app)))
+                .collect(),
             fail_tx: tx,
             thread: Some(h),
         })
@@ -221,6 +97,10 @@ impl Init {
             ap.lock().unwrap().stop_check_threads();
         }
 
+        // stop healthcheck synchronisation thread
+        let _t = self.fail_tx.send(None);
+        let _t = self.thread.take().unwrap().join();
+
         // stop the applications
         for ap in self.applications
             .iter_mut()
@@ -228,7 +108,7 @@ impl Init {
             .rev()
         {
             let mut ap = ap.lock().unwrap();
-            log(format!("Stopping {}", ap.config.exec));
+            log(format!("Stopping {}", ap.exec));
             ap.stop();
         }
     }
