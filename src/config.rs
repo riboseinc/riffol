@@ -25,6 +25,7 @@ extern crate nereon;
 
 use application::{AppAction, AppState, Application};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
+use init;
 use serde_json;
 use std::collections::HashMap;
 use std::iter::Iterator;
