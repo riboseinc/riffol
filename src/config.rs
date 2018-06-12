@@ -23,6 +23,7 @@
 
 extern crate nereon;
 
+use application::{AppAction, AppState, Application};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use serde_json;
 use std::collections::HashMap;
@@ -65,6 +66,8 @@ struct JsonApplication {
     #[serde(default = "default_application_restart")]
     restart: String,
     healthchecks: Option<Vec<String>>,
+    #[serde(default = "default_application_healthcheckfail")]
+    healthcheckfail: AppAction,
 }
 
 #[derive(Deserialize)]
@@ -84,6 +87,10 @@ fn default_application_restart() -> String {
     "restart".to_string()
 }
 
+fn default_application_healthcheckfail() -> AppAction {
+    AppAction::Restart
+}
+
 #[derive(Deserialize)]
 struct JsonHealthChecks {
     checks: Vec<String>,
@@ -92,21 +99,12 @@ struct JsonHealthChecks {
 }
 
 #[derive(Debug)]
-pub struct Config {
+pub struct Riffol {
     pub applications: Vec<Application>,
     pub dependencies: Vec<String>,
 }
 
-#[derive(Debug)]
-pub struct Application {
-    pub exec: String,
-    pub start: String,
-    pub stop: String,
-    pub restart: String,
-    pub healthchecks: Vec<IntervalHealthCheck>,
-}
-
-pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, String> {
+pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, String> {
     let options = vec![
         nereon::Opt::new(
             "",
@@ -130,7 +128,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, Str
         Err(e) => return Err(format!("Invalid config: {}", e)),
     };
 
-    let mut config = Config {
+    let mut riffol = Riffol {
         applications: vec![],
         dependencies: vec![],
     };
@@ -151,12 +149,15 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, Str
                                     }
                                     None => vec![],
                                 };
-                                config.applications.push(Application {
+                                riffol.applications.push(Application {
                                     exec: ap.exec.clone(),
                                     start: ap.start.clone(),
                                     stop: ap.stop.clone(),
                                     restart: ap.restart.clone(),
                                     healthchecks: healthchecks,
+                                    healthcheckfail: ap.healthcheckfail.clone(),
+                                    checks: vec![],
+                                    state: AppState::Stopped,
                                 })
                             }
                             None => return Err(format!("No such application \"{}\"", ap_name)),
@@ -166,7 +167,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, Str
                         match json_config.dependency.get(dep_name) {
                             Some(dep) => dep.packages
                                 .iter()
-                                .for_each(|d| config.dependencies.push(d.clone())),
+                                .for_each(|d| riffol.dependencies.push(d.clone())),
                             None => return Err(format!("No such dependencies \"{}\"", dep_name)),
                         }
                     }
@@ -176,7 +177,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Config, Str
         }
     }
 
-    Ok(config)
+    Ok(riffol)
 }
 
 fn get_healthchecks(

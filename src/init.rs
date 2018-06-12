@@ -21,123 +21,100 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use config;
-use health::IntervalHealthCheck;
-use std::process::Command;
-use std::time::{Duration, Instant};
+use application::{AppAction, AppState, Application};
+use std::sync::{mpsc, Arc, Mutex};
 use std::{env, thread};
 
-#[derive(PartialEq)]
-enum AppState {
-    Running,
-    Failed,
-    Stopped,
-}
-
-struct Application {
-    config: config::Application,
-    state: AppState,
-}
+pub type AppMutex = Arc<Mutex<Application>>;
 
 pub struct Init {
-    applications: Vec<Application>,
-}
-
-struct Check<'a> {
-    the_check: &'a IntervalHealthCheck,
-    application: &'a Application,
-    instant: Instant,
+    applications: Vec<AppMutex>,
+    fail_tx: mpsc::Sender<Option<AppMutex>>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Init {
-    pub fn new(mut configs: Vec<config::Application>) -> Init {
-        Init {
-            applications: {
-                configs
-                    .drain(..)
-                    .map(|c| Application {
-                        config: c,
-                        state: AppState::Stopped,
-                    })
-                    .collect()
-            },
-        }
+    pub fn new(mut applications: Vec<Application>) -> Result<Init, String> {
+        let (tx, rx) = mpsc::channel::<Option<AppMutex>>();
+        let h = {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                for msg in rx.iter() {
+                    match msg {
+                        Some(ap_mutex) => {
+                            let mut ap = ap_mutex.lock().unwrap();
+                            match ap.healthcheckfail {
+                                AppAction::Restart => {
+                                    ap.stop_check_threads();
+                                    ap.restart();
+                                    ap.spawn_check_threads(tx.clone(), Arc::clone(&ap_mutex));
+                                }
+                            }
+                        }
+                        None => return (),
+                    }
+                }
+            })
+        };
+
+        Ok(Init {
+            applications: applications
+                .drain(..)
+                .map(|app| Arc::new(Mutex::new(app)))
+                .collect(),
+            fail_tx: tx,
+            thread: Some(h),
+        })
     }
 
     pub fn start(&mut self) -> Result<(), String> {
-        let arg0 = env::args().next().unwrap();
-
-        for mut ap in self.applications.iter_mut() {
-            match Command::new(&ap.config.exec).arg(&ap.config.start).spawn() {
-                Ok(mut child) => match child.wait() {
-                    Ok(s) if s.success() => {
-                        eprintln!("{}: Successfully spawned {}", arg0, ap.config.exec);
-                        ap.state = AppState::Running;
-                    }
-                    _ => {
-                        eprintln!("{}: Application exited with error {}", arg0, ap.config.exec);
-                        ap.state = AppState::Failed;
-                    }
-                },
-                Err(_) => {
-                    eprintln!("{}: Failed to spawn {}", arg0, ap.config.exec);
-                    ap.state = AppState::Failed;
-                    break;
-                }
+        // start the applications
+        for ap_mutex in &self.applications {
+            let ref mut ap = ap_mutex.lock().unwrap();
+            if ap.start() {
+                let ap_mutex = Arc::clone(&ap_mutex);
+                let tx = self.fail_tx.clone();
+                ap.spawn_check_threads(tx, Arc::clone(&ap_mutex));
+            } else {
+                break;
             }
         }
 
         if !self.applications
             .iter()
-            .all(|a| a.state == AppState::Running)
+            .all(|a| a.lock().unwrap().state == AppState::Running)
         {
             self.stop();
             return Err("Some applications failed to start".to_owned());
         }
 
-        // build vector of Checks
-        let mut checks = self.applications.iter().fold(vec![], |mut a, v| {
-            for c in v.config.healthchecks.iter() {
-                a.push(Check {
-                    application: v,
-                    the_check: c,
-                    instant: Instant::now() + c.interval,
-                });
-            }
-            a
-        });
-
-        /*
-        loop {
-            let now = Instant::now();
-            match checks.iter_mut().min_by(|x, y| x.instant.cmp(&y.instant)) {
-                Some(check) => {
-                    if now <= check.instant {
-                        thread::sleep(check.instant - now);
-                    }
-                    check.instant += check.the_check.interval;
-                    if !check.the_check.do_check() {}
-                }
-                _ => thread::sleep(Duration::from_secs(1)),
-            }
-        }
-         */
         Ok(())
     }
 
     pub fn stop(&mut self) {
-        let arg0 = env::args().next().unwrap();
+        // stop all healtcheck threads
+        for ap in &self.applications {
+            ap.lock().unwrap().stop_check_threads();
+        }
 
+        // stop healthcheck synchronisation thread
+        let _t = self.fail_tx.send(None);
+        let _t = self.thread.take().unwrap().join();
+
+        // stop the applications
         for ap in self.applications
             .iter_mut()
-            .filter(|a| a.state == AppState::Running)
+            .filter(|a| a.lock().unwrap().state == AppState::Running)
             .rev()
         {
-            eprintln!("{}: Stopping {}", arg0, ap.config.exec);
-            let _result = Command::new(&ap.config.exec)
-                .arg(&ap.config.stop)
-                .spawn()
-                .and_then(|mut c| c.wait());
+            let mut ap = ap.lock().unwrap();
+            log(format!("Stopping {}", ap.exec));
+            ap.stop();
         }
     }
+}
+
+fn log(s: String) {
+    let arg0 = env::args().next().unwrap();
+    eprintln!("{}: {}", arg0, s);
 }
