@@ -59,13 +59,7 @@ fn main() {
         }
     });
 
-    let mut init = match Init::new(apps) {
-        Ok(i) => i,
-        Err(e) => {
-            eprintln!("{}: Failed to start init system ({}).", arg0, e);
-            return ();
-        }
-    };
+    let mut init = Init::new(apps);
 
     match init.start() {
         Ok(_) => match signal.recv() {

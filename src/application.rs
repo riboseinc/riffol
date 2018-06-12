@@ -76,11 +76,12 @@ impl Application {
         }
     }
 
-    pub fn stop(&self) {
+    pub fn stop(&mut self) {
         let _result = Command::new(&self.exec)
             .arg(&self.stop)
             .spawn()
             .and_then(|mut c| c.wait());
+        self.state = AppState::Stopped;
     }
 
     pub fn restart(&self) {

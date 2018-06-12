@@ -34,83 +34,75 @@ pub struct Init {
 }
 
 impl Init {
-    pub fn new(mut applications: Vec<Application>) -> Result<Init, String> {
+    pub fn new(mut applications: Vec<Application>) -> Init {
         let (tx, rx) = mpsc::channel::<Option<AppMutex>>();
-        let h = {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                for msg in rx.iter() {
-                    match msg {
-                        Some(ap_mutex) => {
-                            let mut ap = ap_mutex.lock().unwrap();
-                            match ap.healthcheckfail {
-                                AppAction::Restart => {
-                                    ap.stop_check_threads();
-                                    ap.restart();
-                                    ap.spawn_check_threads(tx.clone(), Arc::clone(&ap_mutex));
-                                }
-                            }
+        let fail_tx = tx.clone();
+        let healthcheck_fn = move || {
+            for msg in rx.iter() {
+                if let Some(ap_mutex) = msg {
+                    let mut ap = ap_mutex.lock().unwrap();
+                    match ap.healthcheckfail {
+                        AppAction::Restart => {
+                            ap.stop_check_threads();
+                            ap.restart();
+                            ap.spawn_check_threads(tx.clone(), Arc::clone(&ap_mutex));
                         }
-                        None => return (),
                     }
+                } else {
+                    // None signals return
+                    return ();
                 }
-            })
+            }
         };
 
-        Ok(Init {
+        Init {
             applications: applications
                 .drain(..)
                 .map(|app| Arc::new(Mutex::new(app)))
                 .collect(),
-            fail_tx: tx,
-            thread: Some(h),
-        })
+            fail_tx: fail_tx,
+            thread: Some(thread::spawn(healthcheck_fn)),
+        }
     }
 
     pub fn start(&mut self) -> Result<(), String> {
         // start the applications
-        for ap_mutex in &self.applications {
-            let ref mut ap = ap_mutex.lock().unwrap();
-            if ap.start() {
-                let ap_mutex = Arc::clone(&ap_mutex);
-                let tx = self.fail_tx.clone();
-                ap.spawn_check_threads(tx, Arc::clone(&ap_mutex));
-            } else {
-                break;
-            }
-        }
-
-        if !self.applications
+        if self.applications
             .iter()
-            .all(|a| a.lock().unwrap().state == AppState::Running)
+            .map(|ap_mutex| {
+                let mut ap = ap_mutex.lock().unwrap();
+                if !ap.start() {
+                    return false;
+                }
+                ap.spawn_check_threads(self.fail_tx.clone(), Arc::clone(&ap_mutex));
+                true
+            })
+            .any(|b| !b)
         {
             self.stop();
             return Err("Some applications failed to start".to_owned());
         }
-
         Ok(())
     }
 
     pub fn stop(&mut self) {
         // stop all healtcheck threads
-        for ap in &self.applications {
-            ap.lock().unwrap().stop_check_threads();
-        }
+        self.applications.iter().for_each(|ap_mutex| {
+            ap_mutex.lock().unwrap().stop_check_threads();
+        });
 
         // stop healthcheck synchronisation thread
         let _t = self.fail_tx.send(None);
         let _t = self.thread.take().unwrap().join();
 
         // stop the applications
-        for ap in self.applications
-            .iter_mut()
-            .filter(|a| a.lock().unwrap().state == AppState::Running)
-            .rev()
-        {
-            let mut ap = ap.lock().unwrap();
-            log(format!("Stopping {}", ap.exec));
-            ap.stop();
-        }
+        self.applications.iter().for_each(|ap_mutex| {
+            let mut ap = ap_mutex.lock().unwrap();
+            if ap.state == AppState::Running {
+                log(format!("Stopping {}", ap.exec));
+                ap.stop();
+            }
+        });
     }
 }
 
