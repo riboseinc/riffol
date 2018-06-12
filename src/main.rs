@@ -54,12 +54,19 @@ fn main() {
             .arg(d)
             .status();
         if result.is_err() || !result.unwrap().success() {
-            eprintln!("{}: Failed to install dependency \"{}\"", arg0, d);
+            eprintln!("{}: Failed to install dependency \"{}\".", arg0, d);
             return ();
         }
     });
 
-    let mut init = Init::new(apps);
+    let mut init = match Init::new(apps) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("{}: Failed to start init system ({}).", arg0, e);
+            return ();
+        }
+    };
+
     match init.start() {
         Ok(_) => match signal.recv() {
             Some(s) => {

@@ -23,7 +23,7 @@
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -120,6 +120,7 @@ impl DfCheck {
             .arg("-BM")
             .arg("--output=avail")
             .arg(&self.path)
+            .stderr(Stdio::null())
             .output()
         {
             Ok(o) => match (o.status.success(), avail(&o.stdout)) {
@@ -149,7 +150,12 @@ impl ProcCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        match Command::new("/bin/pidof").arg(&self.process).status() {
+        match Command::new("/bin/pidof")
+            .arg(&self.process)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
             Ok(s) if s.success() => Ok(()),
             _ => Err("No such process".to_owned()),
         }
