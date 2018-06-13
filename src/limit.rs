@@ -21,54 +21,38 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate chan_signal;
-extern crate riffol;
+extern crate libc;
 
-use chan_signal::Signal;
-use riffol::config::{get_config, Riffol};
-use riffol::init::Init;
-use std::env;
-use std::process::Command;
+#[derive(Debug, Clone)]
+pub enum Limit {
+    Num(u64),
+    Infinity,
+}
 
-fn main() {
-    let arg0 = env::args().next().unwrap();
+#[derive(Debug, Clone)]
+pub enum RLimit {
+    Memory(Limit),
+    Procs(Limit),
+    Files(Limit),
+}
 
-    let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
-
-    let Riffol {
-        applications: apps,
-        dependencies: deps,
-    } = match get_config(env::args()) {
-        Ok(c) => c,
-        Err(s) => {
-            eprintln!("{}: {}", arg0, s);
-            return ();
-        }
+pub fn setlimit(rlimit: &RLimit) {
+    let (resource, limit) = match rlimit {
+        RLimit::Memory(v) => (libc::RLIMIT_AS, v),
+        RLimit::Procs(v) => (libc::RLIMIT_NPROC, v),
+        RLimit::Files(v) => (libc::RLIMIT_NOFILE, v),
     };
-
-    deps.iter().for_each(|d| {
-        let result = Command::new("apt-get")
-            .arg("-y")
-            .arg("--no-install-recommends")
-            .arg("install")
-            .arg(d)
-            .status();
-        if result.is_err() || !result.unwrap().success() {
-            eprintln!("{}: Failed to install dependency \"{}\".", arg0, d);
-            return ();
-        }
-    });
-
-    let mut init = Init::new(apps);
-
-    match init.start() {
-        Ok(_) => match signal.recv() {
-            Some(s) => {
-                eprintln!("{}: Received signal {:?}", arg0, s);
-                init.stop();
-            }
-            None => (),
-        },
-        Err(s) => eprintln!("{}: {}", arg0, s),
-    }
+    let limit = match limit {
+        Limit::Num(v) => *v,
+        Limit::Infinity => libc::RLIM_INFINITY,
+    };
+    unsafe {
+        let _result = libc::setrlimit64(
+            resource,
+            &libc::rlimit64 {
+                rlim_cur: limit,
+                rlim_max: limit,
+            },
+        );
+    };
 }

@@ -23,8 +23,9 @@
 
 extern crate nereon;
 
-use application::{AppAction, AppState, Application};
+use application::{self, AppAction, AppState};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
+use limit::{Limit, RLimit};
 use serde_json;
 use std::collections::HashMap;
 use std::iter::Iterator;
@@ -32,32 +33,38 @@ use std::path::Path;
 use std::time::Duration;
 
 #[derive(Deserialize)]
-struct JsonConfig {
-    init: HashMap<String, JsonInit>,
-    application_group: HashMap<String, JsonApplicationGroup>,
-    application: HashMap<String, JsonApplication>,
-    dependency: HashMap<String, JsonDependencies>,
+struct Config {
+    init: HashMap<String, Init>,
+    application_group: HashMap<String, AppGroup>,
+    application: HashMap<String, Application>,
+    dependency: HashMap<String, Dependencies>,
     #[serde(default = "default_config_healthchecks")]
-    healthchecks: HashMap<String, JsonHealthChecks>,
+    healthchecks: HashMap<String, HealthChecks>,
+    #[serde(default = "default_config_limits")]
+    limits: HashMap<String, Limits>,
 }
 
-fn default_config_healthchecks() -> HashMap<String, JsonHealthChecks> {
+fn default_config_healthchecks() -> HashMap<String, HealthChecks> {
+    HashMap::new()
+}
+
+fn default_config_limits() -> HashMap<String, Limits> {
     HashMap::new()
 }
 
 #[derive(Deserialize)]
-struct JsonInit {
+struct Init {
     application_groups: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct JsonApplicationGroup {
+struct AppGroup {
     applications: Vec<String>,
     dependencies: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct JsonApplication {
+struct Application {
     exec: String,
     #[serde(default = "default_application_start")]
     start: String,
@@ -68,12 +75,15 @@ struct JsonApplication {
     healthchecks: Option<Vec<String>>,
     #[serde(default = "default_application_healthcheckfail")]
     healthcheckfail: AppAction,
+    limits: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
-struct JsonDependencies {
+struct Dependencies {
     packages: Vec<String>,
 }
+
+type Limits = HashMap<String, u64>;
 
 fn default_application_start() -> String {
     "start".to_string()
@@ -92,7 +102,7 @@ fn default_application_healthcheckfail() -> AppAction {
 }
 
 #[derive(Deserialize)]
-struct JsonHealthChecks {
+struct HealthChecks {
     checks: Vec<String>,
     timeout: u64,
     interval: u64,
@@ -100,7 +110,7 @@ struct JsonHealthChecks {
 
 #[derive(Debug)]
 pub struct Riffol {
-    pub applications: Vec<Application>,
+    pub applications: Vec<application::Application>,
     pub dependencies: Vec<String>,
 }
 
@@ -118,12 +128,12 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
         ),
     ];
 
-    let json_config = match nereon::nereon_json(options, args) {
+    let config = match nereon::nereon_json(options, args) {
         Ok(c) => c,
         Err(s) => return Err(format!("Couldn't get config: {}", s)),
     };
 
-    let json_config = match serde_json::from_str::<JsonConfig>(&json_config) {
+    let config = match serde_json::from_str::<Config>(&config) {
         Ok(c) => c,
         Err(e) => return Err(format!("Invalid config: {}", e)),
     };
@@ -133,29 +143,35 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
         dependencies: vec![],
     };
 
-    for (_, init) in json_config.init {
+    for (_, init) in config.init {
         for group_name in init.application_groups {
-            match json_config.application_group.get(&group_name) {
+            match config.application_group.get(&group_name) {
                 Some(group) => {
                     for ap_name in &group.applications {
-                        match json_config.application.get(ap_name) {
+                        match config.application.get(ap_name) {
                             Some(ap) => {
                                 let healthchecks = match &ap.healthchecks {
-                                    Some(cs) => {
-                                        match get_healthchecks(&json_config.healthchecks, &cs) {
-                                            Ok(cs) => cs,
-                                            Err(e) => return Err(e),
-                                        }
-                                    }
+                                    Some(cs) => match get_healthchecks(&config.healthchecks, &cs) {
+                                        Ok(cs) => cs,
+                                        Err(e) => return Err(e),
+                                    },
                                     None => vec![],
                                 };
-                                riffol.applications.push(Application {
+                                let limits = match &ap.limits {
+                                    Some(ls) => match get_limits(&config.limits, &ls) {
+                                        Ok(ls) => ls,
+                                        Err(e) => return Err(e),
+                                    },
+                                    None => vec![],
+                                };
+                                riffol.applications.push(application::Application {
                                     exec: ap.exec.clone(),
                                     start: ap.start.clone(),
                                     stop: ap.stop.clone(),
                                     restart: ap.restart.clone(),
                                     healthchecks: healthchecks,
                                     healthcheckfail: ap.healthcheckfail.clone(),
+                                    limits: limits,
                                     checks: vec![],
                                     state: AppState::Stopped,
                                 })
@@ -164,7 +180,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                         }
                     }
                     for dep_name in &group.dependencies {
-                        match json_config.dependency.get(dep_name) {
+                        match config.dependency.get(dep_name) {
                             Some(dep) => dep.packages
                                 .iter()
                                 .for_each(|d| riffol.dependencies.push(d.clone())),
@@ -181,7 +197,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
 }
 
 fn get_healthchecks(
-    configs: &HashMap<String, JsonHealthChecks>,
+    configs: &HashMap<String, HealthChecks>,
     checks: &Vec<String>,
 ) -> Result<Vec<IntervalHealthCheck>, String> {
     let mut result = vec![];
@@ -239,6 +255,42 @@ fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
         },
         p => Err(format!("Unknown healthcheck type {}", p)),
     }
+}
+
+fn get_limits(
+    configs: &HashMap<String, Limits>,
+    limits: &Vec<String>,
+) -> Result<Vec<RLimit>, String> {
+    let min = |a, b| match (a, b) {
+        (x, Limit::Infinity) => x,
+        (Limit::Num(x), Limit::Num(y)) if x < y => Limit::Num(x),
+        (_, y) => y,
+    };
+
+    let mut procs = Limit::Infinity;
+    let mut mem = Limit::Infinity;
+    let mut files = Limit::Infinity;
+
+    for name in limits.iter() {
+        match configs.get(name) {
+            Some(config) => {
+                for (k, v) in config.iter() {
+                    match k.as_ref() {
+                        "max_procs" => procs = min(procs, Limit::Num(*v)),
+                        "max_mem" => mem = min(mem, Limit::Num(*v * 1024 * 1024)),
+                        "max_files" => files = min(files, Limit::Num(*v)),
+                        _ => return Err(format!("No such limit ({}).", k)),
+                    }
+                }
+            }
+            None => return Err(format!("No such limits \"{}\"", name)),
+        }
+    }
+    Ok(vec![
+        RLimit::Procs(procs),
+        RLimit::Memory(mem),
+        RLimit::Files(files),
+    ])
 }
 
 #[cfg(test)]

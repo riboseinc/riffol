@@ -22,10 +22,11 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use health::IntervalHealthCheck;
-use init::AppMutex;
+use limit::{setlimit, RLimit};
 use std::env;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
@@ -43,6 +44,7 @@ pub struct Application {
     pub restart: String,
     pub healthchecks: Vec<IntervalHealthCheck>,
     pub healthcheckfail: AppAction,
+    pub limits: Vec<RLimit>,
     pub state: AppState,
     pub checks: Vec<(mpsc::Sender<()>, thread::JoinHandle<()>)>,
 }
@@ -56,7 +58,15 @@ pub enum AppState {
 
 impl Application {
     pub fn start(&mut self) -> bool {
-        match Command::new(&self.exec).arg(&self.start).spawn() {
+        let limits = self.limits.clone();
+        match Command::new(&self.exec)
+            .arg(&self.start)
+            .before_exec(move || {
+                limits.iter().for_each(|l| setlimit(l));
+                Ok(())
+            })
+            .spawn()
+        {
             Ok(mut child) => match child.wait() {
                 Ok(s) if s.success() => {
                     log(format!("Successfully spawned {}", self.exec));
@@ -77,31 +87,37 @@ impl Application {
         }
     }
 
-    pub fn stop(&self) {
+    pub fn stop(&mut self) {
         let _result = Command::new(&self.exec)
             .arg(&self.stop)
             .spawn()
             .and_then(|mut c| c.wait());
+        self.state = AppState::Stopped;
     }
 
     pub fn restart(&self) {
+        let limits = self.limits.clone();
         let _result = Command::new(&self.exec)
             .arg(&self.restart)
+            .before_exec(move || {
+                limits.iter().for_each(|l| setlimit(l));
+                Ok(())
+            })
             .spawn()
             .and_then(|mut c| c.wait());
     }
 
-    pub fn spawn_check_threads(
+    pub fn spawn_check_threads<T: Send + Sync + Clone + 'static>(
         &mut self,
-        fail_tx: mpsc::Sender<Option<AppMutex>>,
-        fail_msg: AppMutex,
+        fail_tx: mpsc::Sender<Option<T>>,
+        fail_msg: T,
     ) -> () {
         self.checks = self.healthchecks
             .iter()
             .map(|c| {
                 let check = c.clone();
                 let fail_tx = fail_tx.clone();
-                let fail_msg = Arc::clone(&fail_msg);
+                let fail_msg = fail_msg.clone();
                 let (tx, rx) = mpsc::channel();
                 let h = thread::spawn(move || {
                     let mut next = Instant::now() + check.interval;
@@ -120,7 +136,7 @@ impl Application {
                                     Ok(_) => (),
                                     Err(e) => {
                                         log(format!("{}. {}.", check.to_string(), e));
-                                        let _t = fail_tx.send(Some(Arc::clone(&fail_msg)));
+                                        let _t = fail_tx.send(Some(fail_msg.clone()));
                                     }
                                 }
                             }
