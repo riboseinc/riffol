@@ -21,13 +21,38 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate serde_json;
+extern crate libc;
 
-#[macro_use]
-extern crate serde_derive;
+#[derive(Debug, Clone)]
+pub enum Limit {
+    Num(u64),
+    Infinity,
+}
 
-pub mod application;
-pub mod config;
-pub mod health;
-pub mod init;
-pub mod limit;
+#[derive(Debug, Clone)]
+pub enum RLimit {
+    Memory(Limit),
+    Procs(Limit),
+    Files(Limit),
+}
+
+pub fn setlimit(rlimit: &RLimit) {
+    let (resource, limit) = match rlimit {
+        RLimit::Memory(v) => (libc::RLIMIT_AS, v),
+        RLimit::Procs(v) => (libc::RLIMIT_NPROC, v),
+        RLimit::Files(v) => (libc::RLIMIT_NOFILE, v),
+    };
+    let limit = match limit {
+        Limit::Num(v) => *v,
+        Limit::Infinity => libc::RLIM_INFINITY,
+    };
+    unsafe {
+        let _result = libc::setrlimit64(
+            resource,
+            &libc::rlimit64 {
+                rlim_cur: limit,
+                rlim_max: limit,
+            },
+        );
+    };
+}

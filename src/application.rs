@@ -22,7 +22,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use health::IntervalHealthCheck;
+use limit::{setlimit, RLimit};
 use std::env;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
@@ -42,6 +44,7 @@ pub struct Application {
     pub restart: String,
     pub healthchecks: Vec<IntervalHealthCheck>,
     pub healthcheckfail: AppAction,
+    pub limits: Vec<RLimit>,
     pub state: AppState,
     pub checks: Vec<(mpsc::Sender<()>, thread::JoinHandle<()>)>,
 }
@@ -55,7 +58,15 @@ pub enum AppState {
 
 impl Application {
     pub fn start(&mut self) -> bool {
-        match Command::new(&self.exec).arg(&self.start).spawn() {
+        let limits = self.limits.clone();
+        match Command::new(&self.exec)
+            .arg(&self.start)
+            .before_exec(move || {
+                limits.iter().for_each(|l| setlimit(l));
+                Ok(())
+            })
+            .spawn()
+        {
             Ok(mut child) => match child.wait() {
                 Ok(s) if s.success() => {
                     log(format!("Successfully spawned {}", self.exec));
@@ -85,8 +96,13 @@ impl Application {
     }
 
     pub fn restart(&self) {
+        let limits = self.limits.clone();
         let _result = Command::new(&self.exec)
             .arg(&self.restart)
+            .before_exec(move || {
+                limits.iter().for_each(|l| setlimit(l));
+                Ok(())
+            })
             .spawn()
             .and_then(|mut c| c.wait());
     }
