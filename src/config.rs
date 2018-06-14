@@ -295,7 +295,9 @@ fn get_limits(
 
 #[cfg(test)]
 mod tests {
+    use super::get_limits;
     use super::mk_healthcheck;
+    use std::collections::HashMap;
 
     #[test]
     fn test() {
@@ -321,5 +323,35 @@ mod tests {
         assert!(mk_healthcheck("df:///dev/sda:100").is_ok());
         assert!(mk_healthcheck("proc://").is_err());
         assert!(mk_healthcheck("proc://anything").is_ok());
+
+        // test get_limits
+        let limits: HashMap<String, u64> = [("max_procs".to_owned(), 64)].iter().cloned().collect();
+        let config: HashMap<String, HashMap<String, u64>> =
+            vec![("1".to_owned(), limits)].iter().cloned().collect();
+        assert!(get_limits(&config, &vec!["2".to_owned()]).is_err());
+        assert!(get_limits(&config, &vec!["1".to_owned()]).is_ok());
+
+        let limits: HashMap<String, u64> = [("nonono".to_owned(), 64)].iter().cloned().collect();
+        let config: HashMap<String, HashMap<String, u64>> =
+            vec![("1".to_owned(), limits)].iter().cloned().collect();
+        assert!(get_limits(&config, &vec!["1".to_owned()]).is_err());
+
+        /*
+        let limits: HashMap<String, u64> = [
+            ("max_procs".to_owned(), 64),
+            ("max_procs".to_owned(), 32),
+        ].iter().cloned().collect();
+        let config: HashMap<String, HashMap<String, u64>> = vec![
+            ("1".to_owned(), limits)
+        ].iter().cloned().collect();
+        assert_eq!(
+            get_limits(&config, &vec!["1".to_owned()]),
+            Ok(vec![
+                RLimit::Procs(Limit::Num(32)),
+                RLimit::Memory(Limit::Infinity),
+                RLimit::Files(Limit::Infinity),
+                ]
+                ).is_err());
+*/
     }
 }
