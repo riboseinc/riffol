@@ -150,7 +150,7 @@ impl ProcCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        match Command::new("/bin/pidof")
+        match Command::new("pidof")
             .arg(&self.process)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
