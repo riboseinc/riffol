@@ -26,49 +26,33 @@ extern crate riffol;
 
 use chan_signal::Signal;
 use riffol::config::{get_config, Riffol};
+use riffol::distro;
 use riffol::init::Init;
 use std::env;
-use std::process::Command;
+use std::process::exit;
 
 fn main() {
-    let arg0 = env::args().next().unwrap();
-
     let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
 
     let Riffol {
         applications: apps,
         dependencies: deps,
-    } = match get_config(env::args()) {
-        Ok(c) => c,
-        Err(s) => {
-            eprintln!("{}: {}", arg0, s);
-            return ();
-        }
-    };
+    } = get_config(env::args()).unwrap_or_else(fail);
 
-    deps.iter().for_each(|d| {
-        let result = Command::new("apt-get")
-            .arg("-y")
-            .arg("--no-install-recommends")
-            .arg("install")
-            .arg(d)
-            .status();
-        if result.is_err() || !result.unwrap().success() {
-            eprintln!("{}: Failed to install dependency \"{}\".", arg0, d);
-            return ();
-        }
-    });
+    distro::install_packages(&deps).unwrap_or_else(fail);
 
     let mut init = Init::new(apps);
 
-    match init.start() {
-        Ok(_) => match signal.recv() {
-            Some(s) => {
-                eprintln!("{}: Received signal {:?}", arg0, s);
-                init.stop();
-            }
-            None => (),
-        },
-        Err(s) => eprintln!("{}: {}", arg0, s),
-    }
+    init.start().unwrap_or_else(fail);
+
+    signal.recv().iter().for_each(|s| {
+        eprintln!("{}: Received signal {:?}", env::args().next().unwrap(), s);
+    });
+
+    init.stop();
+}
+
+fn fail<T>(e: String) -> T {
+    eprintln!("{}: {}", env::args().next().unwrap(), e);
+    exit(1);
 }

@@ -21,14 +21,52 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate serde_json;
+use std::process::Command;
 
-#[macro_use]
-extern crate serde_derive;
+fn is_whichable(cmd: &str) -> bool {
+    Command::new("which")
+        .arg(cmd)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 
-pub mod application;
-pub mod config;
-pub mod distro;
-pub mod health;
-pub mod init;
-pub mod limit;
+fn get_installer() -> Box<Fn(&str) -> bool> {
+    match ["apt", "yum"]
+        .iter()
+        .find(|pm| is_whichable(pm))
+        .unwrap_or(&"")
+        .as_ref()
+    {
+        "apt" => Box::new(|pkg| {
+            Command::new("apt-get")
+                .arg("-y")
+                .arg("--no-install-recommends")
+                .arg("install")
+                .arg(&pkg)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }),
+        "yum" => Box::new(|pkg| {
+            Command::new("yum")
+                .arg("-y")
+                .arg("install")
+                .arg(&pkg)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }),
+        _ => Box::new(|_| false),
+    }
+}
+
+pub fn install_packages(depends: &Vec<String>) -> Result<(), String> {
+    let install = get_installer();
+    for d in depends {
+        if !install(d) {
+            return Err(format!("Couldn't install dependency: {}", d));
+        }
+    }
+    Ok(())
+}
