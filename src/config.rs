@@ -37,19 +37,12 @@ struct Config {
     init: HashMap<String, Init>,
     application_group: HashMap<String, AppGroup>,
     application: HashMap<String, Application>,
+    #[serde(default = "HashMap::new")]
     dependency: HashMap<String, Dependencies>,
-    #[serde(default = "default_config_healthchecks")]
+    #[serde(default = "HashMap::new")]
     healthchecks: HashMap<String, HealthChecks>,
-    #[serde(default = "default_config_limits")]
+    #[serde(default = "HashMap::new")]
     limits: HashMap<String, Limits>,
-}
-
-fn default_config_healthchecks() -> HashMap<String, HealthChecks> {
-    HashMap::new()
-}
-
-fn default_config_limits() -> HashMap<String, Limits> {
-    HashMap::new()
 }
 
 #[derive(Deserialize)]
@@ -60,6 +53,7 @@ struct Init {
 #[derive(Deserialize)]
 struct AppGroup {
     applications: Vec<String>,
+    #[serde(default = "Vec::new")]
     dependencies: Vec<String>,
 }
 
@@ -115,18 +109,16 @@ pub struct Riffol {
 }
 
 pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, String> {
-    let options = vec![
-        nereon::Opt::new(
-            "",
-            Some("f"),
-            Some("file"),
-            Some("RIFFOL_CONFIG"),
-            0,
-            None,
-            Some("@{}"),
-            Some("Configuration file"),
-        ),
-    ];
+    let options = vec![nereon::Opt::new(
+        "",
+        Some("f"),
+        Some("file"),
+        Some("RIFFOL_CONFIG"),
+        0,
+        None,
+        Some("@{}"),
+        Some("Configuration file"),
+    )];
 
     let config = match nereon::nereon_json(options, args) {
         Ok(c) => c,

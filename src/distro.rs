@@ -21,20 +21,27 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use std::env;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Command;
 
-fn is_whichable(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+fn which(cmd: &str) -> bool {
+    env::var("PATH")
+        .unwrap_or("".to_owned())
+        .split(":")
+        .map(|d| match fs::metadata(Path::new(d).join(Path::new(cmd))) {
+            Ok(m) => m.is_file() && (m.permissions().mode() & 0o111) != 0,
+            Err(_) => false,
+        })
+        .any(|x| x)
 }
 
 fn get_installer() -> Box<Fn(&str) -> bool> {
     match ["apt", "yum"]
         .iter()
-        .find(|pm| is_whichable(pm))
+        .find(|pm| which(pm))
         .unwrap_or(&"")
         .as_ref()
     {
@@ -69,4 +76,13 @@ pub fn install_packages(depends: &Vec<String>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_which() {
+        assert_eq!(super::which("ls"), true);
+        assert_eq!(super::which("lllsss"), false);
+    }
 }
