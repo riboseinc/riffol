@@ -13,7 +13,7 @@ if [ "x$nereondbranch" = "x" ]; then
     nereondbranch=master
 fi
 
-if [ "x$gitrebuild" = "x"]; then
+if [ "x$gitrebuild" = "x" ]; then
     gitrebuild="no"
 else
     gitrebuild="$(date)"
