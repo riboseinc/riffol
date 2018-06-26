@@ -53,6 +53,7 @@ struct Init {
 #[derive(Deserialize)]
 struct AppGroup {
     applications: Vec<String>,
+    #[serde(default = "Vec::new")]
     dependencies: Vec<String>,
 }
 
