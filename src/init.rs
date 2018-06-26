@@ -96,7 +96,7 @@ impl Init {
         let _t = self.thread.take().unwrap().join();
 
         // stop the applications
-        self.applications.iter().for_each(|ap_mutex| {
+        self.applications.iter().rev().for_each(|ap_mutex| {
             let mut ap = ap_mutex.lock().unwrap();
             if ap.state == AppState::Running {
                 log(format!("Stopping {}", ap.exec));
