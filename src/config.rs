@@ -60,16 +60,19 @@ struct AppGroup {
 #[derive(Deserialize)]
 struct Application {
     exec: String,
+    dir: Option<String>,
     #[serde(default = "default_application_start")]
     start: String,
     #[serde(default = "default_application_stop")]
     stop: String,
     #[serde(default = "default_application_restart")]
     restart: String,
-    healthchecks: Option<Vec<String>>,
+    #[serde(default = "Vec::new")]
+    healthchecks: Vec<String>,
     #[serde(default = "default_application_healthcheckfail")]
     healthcheckfail: AppAction,
-    limits: Option<Vec<String>>,
+    #[serde(default = "Vec::new")]
+    limits: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -80,15 +83,15 @@ struct Dependencies {
 type Limits = HashMap<String, u64>;
 
 fn default_application_start() -> String {
-    "start".to_string()
+    "start".to_owned()
 }
 
 fn default_application_stop() -> String {
-    "stop".to_string()
+    "stop".to_owned()
 }
 
 fn default_application_restart() -> String {
-    "restart".to_string()
+    "restart".to_owned()
 }
 
 fn default_application_healthcheckfail() -> AppAction {
@@ -142,22 +145,20 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                     for ap_name in &group.applications {
                         match config.application.get(ap_name) {
                             Some(ap) => {
-                                let healthchecks = match &ap.healthchecks {
-                                    Some(cs) => match get_healthchecks(&config.healthchecks, &cs) {
-                                        Ok(cs) => cs,
-                                        Err(e) => return Err(e),
-                                    },
-                                    None => vec![],
+                                let healthchecks = match get_healthchecks(
+                                    &config.healthchecks,
+                                    &ap.healthchecks,
+                                ) {
+                                    Ok(cs) => cs,
+                                    Err(e) => return Err(e),
                                 };
-                                let limits = match &ap.limits {
-                                    Some(ls) => match get_limits(&config.limits, &ls) {
-                                        Ok(ls) => ls,
-                                        Err(e) => return Err(e),
-                                    },
-                                    None => vec![],
+                                let limits = match get_limits(&config.limits, &ap.limits) {
+                                    Ok(ls) => ls,
+                                    Err(e) => return Err(e),
                                 };
                                 riffol.applications.push(application::Application {
                                     exec: ap.exec.clone(),
+                                    dir: ap.dir.clone().unwrap_or("/tmp".to_owned()),
                                     start: ap.start.clone(),
                                     stop: ap.stop.clone(),
                                     restart: ap.restart.clone(),

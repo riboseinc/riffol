@@ -3,8 +3,6 @@
 pidfile=/riffol/openvpn.pid
 conffile=openvpn.conf
 
-cd /etc/openvpn
-
 if [ "$1" = "start" ]; then
     rm -f $pidfile
     /usr/sbin/openvpn --daemon --writepid $pidfile --config $conffile

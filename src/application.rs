@@ -39,6 +39,7 @@ pub enum AppAction {
 #[derive(Debug)]
 pub struct Application {
     pub exec: String,
+    pub dir: String,
     pub start: String,
     pub stop: String,
     pub restart: String,
@@ -96,12 +97,13 @@ impl Application {
     }
 
     pub fn restart(&self) {
-        let limits = self.limits.clone();
+        let limits = self.limits.to_owned();
+        let dir = self.dir.to_owned();
         let _result = Command::new(&self.exec)
             .arg(&self.restart)
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
-                Ok(())
+                env::set_current_dir(&dir)
             })
             .spawn()
             .and_then(|mut c| c.wait());
