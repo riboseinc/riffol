@@ -1,6 +1,6 @@
 #!/bin/sh
 
-pidfile=/riffol/openvpn.pid
+pidfile=/var/run/openvpn.pid
 conffile=openvpn.conf
 
 if [ "$1" = "start" ]; then
