@@ -29,6 +29,7 @@ use limit::{Limit, RLimit};
 use serde_json;
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::iter::Iterator;
 use std::path::Path;
 use std::time::Duration;
@@ -64,6 +65,7 @@ struct Application {
     dir: Option<String>,
     #[serde(default = "Vec::new")]
     env: Vec<String>,
+    env_file: Option<String>,
     #[serde(default = "default_application_start")]
     start: String,
     #[serde(default = "default_application_stop")]
@@ -159,10 +161,26 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     Ok(ls) => ls,
                                     Err(e) => return Err(e),
                                 };
-                                let env = match get_environment(&ap.env) {
-                                    Ok(es) => es,
-                                    Err(e) => return Err(e),
+                                let env = get_environment(&ap.env);
+                                let env = match ap.env_file {
+                                    Some(ref file) => match fs::read_to_string(file) {
+                                        Ok(s) => {
+                                            let mut e = get_environment(&s.lines()
+                                                .map(String::from)
+                                                .collect());
+                                            e.extend(env);
+                                            e
+                                        }
+                                        Err(e) => {
+                                            return Err(format!(
+                                                "Can't read env_file {}: {:?}",
+                                                file, e
+                                            ))
+                                        }
+                                    },
+                                    None => env,
                                 };
+
                                 riffol.applications.push(application::Application {
                                     exec: ap.exec.clone(),
                                     dir: ap.dir.clone().unwrap_or("/tmp".to_owned()),
@@ -294,8 +312,8 @@ fn get_limits(
     ])
 }
 
-fn get_environment(vars: &Vec<String>) -> Result<HashMap<String, String>, String> {
-    Ok(vars.iter()
+fn get_environment(vars: &Vec<String>) -> HashMap<String, String> {
+    vars.iter()
         .map(|v| {
             let kv = v.splitn(2, '=').collect::<Vec<&str>>();
             match kv.len() {
@@ -303,7 +321,7 @@ fn get_environment(vars: &Vec<String>) -> Result<HashMap<String, String>, String
                 _ => (kv[0].to_owned(), kv[1].to_owned()),
             }
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -314,7 +332,7 @@ mod tests {
 
     #[test]
     fn test() {
-        let args = vec!["-f", "riffol.conf"]
+        let args = vec!["-f", "tests/riffol.conf"]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
