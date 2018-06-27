@@ -107,6 +107,7 @@ application "name" {
     "string"
     "string"
   ]
+  env_file = "string"
   start = "string"
   stop = "string"
   restart = "string"
@@ -132,6 +133,7 @@ application "www" {
     var1key=var1value
     var2key=var2value
   ]
+  env_file = "/etc/httpd/morevars"
   start = "start"
   stop = "stop"
   restart = "restart"
