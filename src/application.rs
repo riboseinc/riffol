@@ -39,6 +39,7 @@ pub enum AppAction {
 #[derive(Debug)]
 pub struct Application {
     pub exec: String,
+    pub dir: String,
     pub start: String,
     pub stop: String,
     pub restart: String,
@@ -61,6 +62,7 @@ impl Application {
         let limits = self.limits.clone();
         match Command::new(&self.exec)
             .arg(&self.start)
+            .current_dir(&self.dir)
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())
@@ -90,15 +92,17 @@ impl Application {
     pub fn stop(&mut self) {
         let _result = Command::new(&self.exec)
             .arg(&self.stop)
+            .current_dir(&self.dir)
             .spawn()
             .and_then(|mut c| c.wait());
         self.state = AppState::Stopped;
     }
 
     pub fn restart(&self) {
-        let limits = self.limits.clone();
+        let limits = self.limits.to_owned();
         let _result = Command::new(&self.exec)
             .arg(&self.restart)
+            .current_dir(&self.dir)
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())

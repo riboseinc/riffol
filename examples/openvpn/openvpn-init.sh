@@ -1,12 +1,12 @@
 #!/bin/sh
 
-pidfile=/riffol/openvpn.pid
+pidfile=/var/run/openvpn.pid
 conffile=openvpn.conf
-
-cd /etc/openvpn
 
 if [ "$1" = "start" ]; then
     rm -f $pidfile
+    mkdir /dev/net
+    mknod /dev/net/tun c 10 200
     /usr/sbin/openvpn --daemon --writepid $pidfile --config $conffile
 fi
 

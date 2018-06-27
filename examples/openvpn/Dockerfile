@@ -1,23 +1,27 @@
-from centos:latest
+FROM centos:latest
 
-cmd LD_LIBRARY_PATH=/usr/local/lib /root/.cargo/bin/riffol -f /etc/riffol.conf
+ARG serial
+RUN echo "(re)building: (#$serial)"
 
-run yum install -y gcc git make autoconf automake libtool
-run git clone https://github.com/vstakhov/libucl.git && cd libucl && ./autogen.sh && ./configure && make install
+RUN yum install -y gcc git make autoconf automake libtool epel-release sysvinit-tools \
+ && yum install -y openvpn \
+ && mkdir -p /dev/net && mknod /dev/net/tun c 10 200
 
-run yum -y install epel-release sysvinit-tools
-run yum -y install openvpn
-run mkdir -p /dev/net && mknod /dev/net/tun c 10 200
+RUN git clone https://github.com/vstakhov/libucl.git \
+ && cd libucl \
+ && ./autogen.sh \
+ && ./configure \
+ && make install
 
-run curl https://sh.rustup.rs -sSf | sh -s -- -y
+ARG riffolbranch=master
+ARG nereondbranch=master
 
-arg gitrebuild
-arg riffolbranch=master
-arg nereondbranch=master
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
-run echo $gitrebuild \
-    && /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol.git --branch $riffolbranch \
-    && /root/.cargo/bin/cargo install --git https://github.com/riboseinc/nereond.git --branch $nereondbranch
+RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol.git --branch $riffolbranch \
+ && /root/.cargo/bin/cargo install --git https://github.com/riboseinc/nereond.git --branch $nereondbranch
 
-copy riffol.conf /etc/
-copy openvpn-init.sh /riffol/
+COPY riffol.conf /etc/
+COPY openvpn-init.sh /riffol/
+
+CMD LD_LIBRARY_PATH=/usr/local/lib /root/.cargo/bin/riffol -f /etc/riffol.conf
