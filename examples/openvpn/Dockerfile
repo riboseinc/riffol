@@ -1,8 +1,5 @@
 FROM centos:latest
 
-ARG serial
-RUN echo "(re)building: (#$serial)"
-
 RUN yum install -y gcc git make autoconf automake libtool epel-release sysvinit-tools \
  && yum install -y openvpn \
  && mkdir -p /dev/net && mknod /dev/net/tun c 10 200
@@ -13,13 +10,10 @@ RUN git clone https://github.com/vstakhov/libucl.git \
  && ./configure \
  && make install
 
-ARG riffolbranch=master
-ARG nereondbranch=master
-
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
-RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol.git --branch $riffolbranch \
- && /root/.cargo/bin/cargo install --git https://github.com/riboseinc/nereond.git --branch $nereondbranch
+RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/nereond.git
+RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol.git --branch env
 
 COPY riffol.conf /etc/
 COPY openvpn-init.sh /riffol/

@@ -28,6 +28,7 @@ use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
 use serde_json;
 use std::collections::HashMap;
+use std::env;
 use std::iter::Iterator;
 use std::path::Path;
 use std::time::Duration;
@@ -61,6 +62,8 @@ struct AppGroup {
 struct Application {
     exec: String,
     dir: Option<String>,
+    #[serde(default = "Vec::new")]
+    env: Vec<String>,
     #[serde(default = "default_application_start")]
     start: String,
     #[serde(default = "default_application_stop")]
@@ -156,9 +159,14 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     Ok(ls) => ls,
                                     Err(e) => return Err(e),
                                 };
+                                let env = match get_environment(&ap.env) {
+                                    Ok(es) => es,
+                                    Err(e) => return Err(e),
+                                };
                                 riffol.applications.push(application::Application {
                                     exec: ap.exec.clone(),
                                     dir: ap.dir.clone().unwrap_or("/tmp".to_owned()),
+                                    env: env,
                                     start: ap.start.clone(),
                                     stop: ap.stop.clone(),
                                     restart: ap.restart.clone(),
@@ -284,6 +292,18 @@ fn get_limits(
         RLimit::Memory(mem),
         RLimit::Files(files),
     ])
+}
+
+fn get_environment(vars: &Vec<String>) -> Result<HashMap<String, String>, String> {
+    Ok(vars.iter()
+        .map(|v| {
+            let kv = v.splitn(2, '=').collect::<Vec<&str>>();
+            match kv.len() {
+                1 => (kv[0].to_owned(), env::var(kv[0]).unwrap_or("".to_owned())),
+                _ => (kv[0].to_owned(), kv[1].to_owned()),
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]

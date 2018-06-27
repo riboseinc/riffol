@@ -23,6 +23,7 @@
 
 use health::IntervalHealthCheck;
 use limit::{setlimit, RLimit};
+use std::collections::HashMap;
 use std::env;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -40,6 +41,7 @@ pub enum AppAction {
 pub struct Application {
     pub exec: String,
     pub dir: String,
+    pub env: HashMap<String, String>,
     pub start: String,
     pub stop: String,
     pub restart: String,
@@ -63,6 +65,8 @@ impl Application {
         match Command::new(&self.exec)
             .arg(&self.start)
             .current_dir(&self.dir)
+            .env_clear()
+            .envs(self.env.iter())
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())
@@ -93,6 +97,8 @@ impl Application {
         let _result = Command::new(&self.exec)
             .arg(&self.stop)
             .current_dir(&self.dir)
+            .env_clear()
+            .envs(self.env.iter())
             .spawn()
             .and_then(|mut c| c.wait());
         self.state = AppState::Stopped;
@@ -103,6 +109,8 @@ impl Application {
         let _result = Command::new(&self.exec)
             .arg(&self.restart)
             .current_dir(&self.dir)
+            .env_clear()
+            .envs(self.env.iter())
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())
