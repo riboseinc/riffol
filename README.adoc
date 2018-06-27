@@ -103,6 +103,10 @@ application_group "webstack" {
 application "name" {
   exec = "string"
   dir = "string"
+  env = [
+    "string"
+    "string"
+  ]
   start = "string"
   stop = "string"
   restart = "string"
@@ -124,6 +128,10 @@ E.g.:
 application "www" {
   exec = "/etc/init.d/http"
   dir = "/var/www"
+  env = [
+    var1key=var1value
+    var2key=var2value
+  ]
   start = "start"
   stop = "stop"
   restart = "restart"
