@@ -103,9 +103,9 @@ impl Application {
             .arg(&self.restart)
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
-                eprintln!("{}", dir);
-                env::set_current_dir(&dir)
+                Ok(())
             })
+            .current_dir(dir)
             .spawn()
             .and_then(|mut c| c.wait());
     }
