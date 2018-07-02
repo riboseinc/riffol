@@ -123,7 +123,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
         Some("RIFFOL_CONFIG"),
         0,
         None,
-        Some("@{}"),
+        Some("${file:{}}"),
         Some("Configuration file"),
     )];
 
