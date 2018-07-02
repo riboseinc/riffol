@@ -13,7 +13,7 @@ RUN git clone https://github.com/vstakhov/libucl.git \
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
 RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/nereond.git
-RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol.git --branch env
+RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol.git
 
 COPY riffol.conf /etc/
 COPY openvpn-init.sh /riffol/
