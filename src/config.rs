@@ -28,7 +28,6 @@ use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
 use serde_json;
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::iter::Iterator;
 use std::path::Path;
@@ -63,8 +62,8 @@ struct AppGroup {
 struct Application {
     exec: String,
     dir: Option<String>,
-    #[serde(default = "Vec::new")]
-    env: Vec<String>,
+    #[serde(default = "HashMap::new")]
+    env: HashMap<String, String>,
     env_file: Option<String>,
     #[serde(default = "default_application_start")]
     start: String,
@@ -124,7 +123,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
         Some("RIFFOL_CONFIG"),
         0,
         None,
-        Some("@{}"),
+        Some("${file:{}}"),
         Some("Configuration file"),
     )];
 
@@ -161,16 +160,17 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     Ok(ls) => ls,
                                     Err(e) => return Err(e),
                                 };
-                                let env = get_environment(&ap.env);
-                                let env = match ap.env_file {
+                                let mut env = match ap.env_file {
                                     Some(ref file) => match fs::read_to_string(file) {
-                                        Ok(s) => {
-                                            let mut e = get_environment(&s.lines()
-                                                .map(String::from)
-                                                .collect());
-                                            e.extend(env);
-                                            e
-                                        }
+                                        Ok(s) => s.lines()
+                                            .map(|v| {
+                                                let kv = v.splitn(2, '=').collect::<Vec<&str>>();
+                                                match kv.len() {
+                                                    1 => (kv[0].to_owned(), "".to_owned()),
+                                                    _ => (kv[0].to_owned(), kv[1].to_owned()),
+                                                }
+                                            })
+                                            .collect(),
                                         Err(e) => {
                                             return Err(format!(
                                                 "Can't read env_file {}: {:?}",
@@ -178,8 +178,9 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                             ))
                                         }
                                     },
-                                    None => env,
+                                    None => HashMap::new(),
                                 };
+                                env.extend(ap.env.clone());
 
                                 riffol.applications.push(application::Application {
                                     exec: ap.exec.clone(),
@@ -310,18 +311,6 @@ fn get_limits(
         RLimit::Memory(mem),
         RLimit::Files(files),
     ])
-}
-
-fn get_environment(vars: &Vec<String>) -> HashMap<String, String> {
-    vars.iter()
-        .map(|v| {
-            let kv = v.splitn(2, '=').collect::<Vec<&str>>();
-            match kv.len() {
-                1 => (kv[0].to_owned(), env::var(kv[0]).unwrap_or("".to_owned())),
-                _ => (kv[0].to_owned(), kv[1].to_owned()),
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]
