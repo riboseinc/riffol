@@ -22,6 +22,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 extern crate chan_signal;
+extern crate libc;
 extern crate riffol;
 
 use chan_signal::Signal;
@@ -31,8 +32,34 @@ use riffol::init::Init;
 use std::env;
 use std::process::exit;
 
+static PR_SET_CHILD_SUBREAPER: libc::c_int = 36;
+
+fn progname() -> String {
+    match env::current_exe() {
+        Ok(name) => name.as_path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        Err(_) => "(unknown)".to_owned(),
+    }
+}
+
 fn main() {
-    let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
+    let mut signals = vec![Signal::INT, Signal::TERM];
+
+    if unsafe { libc::getpid() } != 1 {
+        if unsafe { libc::prctl(PR_SET_CHILD_SUBREAPER, 1) } == 0 {
+            signals.push(Signal::CHLD);
+        } else {
+            eprintln!(
+                "{}: Not PID 1 and couldn't set PR_CHILD_SUBREAPER",
+                progname(),
+            );
+        }
+    }
+
+    let signal = chan_signal::notify(signals.as_ref());
 
     let Riffol {
         applications: apps,
@@ -45,14 +72,22 @@ fn main() {
 
     init.start().unwrap_or_else(fail);
 
-    signal.recv().iter().for_each(|s| {
-        eprintln!("{}: Received signal {:?}", env::args().next().unwrap(), s);
-    });
+    loop {
+        let s = signal.recv().unwrap();
+        eprintln!("{}: Received signal {:?}", progname(), s);
+
+        match s {
+            Signal::CHLD => unsafe {
+                libc::wait(std::ptr::null_mut());
+            },
+            _ => break,
+        }
+    }
 
     init.stop();
 }
 
 fn fail<T>(e: String) -> T {
-    eprintln!("{}: {}", env::args().next().unwrap(), e);
+    eprintln!("{}: {}", progname(), e);
     exit(1);
 }
