@@ -103,10 +103,10 @@ application_group "webstack" {
 application "name" {
   exec = "string"
   dir = "string"
-  env = [
-    "string"
-    "string"
-  ]
+  env = {
+    "string" = "string"
+    "string" = "string"
+  }
   env_file = "string"
   start = "string"
   stop = "string"
@@ -129,10 +129,10 @@ E.g.:
 application "www" {
   exec = "/etc/init.d/http"
   dir = "/var/www"
-  env = [
-    var1key=var1value
-    var2key=var2value
-  ]
+  env = {
+    var1key = var1value
+    var2key = var2value
+  }
   env_file = "/etc/httpd/morevars"
   start = "start"
   stop = "stop"

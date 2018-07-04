@@ -23,6 +23,12 @@
 
 extern crate riffol;
 
-fn main() {
-    riffol::riffol(std::env::args());
+#[test]
+fn zombie() {
+    // unfortunately we can't use cargo test here because it
+    // uses threads to run the test and chan_signal needs to be
+    // used in the main thread of a program.
+    // Test remains in the hope of a workaround.
+
+    // riffol::riffol(vec!["-f".to_owned(), "tests/zombie.conf".to_owned()]);
 }
