@@ -21,14 +21,80 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+extern crate chan_signal;
+extern crate libc;
 extern crate serde_json;
 
 #[macro_use]
 extern crate serde_derive;
 
-pub mod application;
-pub mod config;
-pub mod distro;
-pub mod health;
-pub mod init;
-pub mod limit;
+mod application;
+mod config;
+mod distro;
+mod health;
+mod init;
+mod limit;
+
+use chan_signal::Signal;
+use std::env;
+use std::process::exit;
+
+static PR_SET_CHILD_SUBREAPER: libc::c_int = 36;
+
+pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
+    let mut signals = vec![Signal::INT, Signal::TERM];
+
+    if unsafe { libc::getpid() } != 1 {
+        if unsafe { libc::prctl(PR_SET_CHILD_SUBREAPER, 1) } == 0 {
+            signals.push(Signal::CHLD);
+        } else {
+            eprintln!(
+                "{}: Not PID 1 and couldn't set PR_CHILD_SUBREAPER",
+                progname(),
+            );
+        }
+    }
+
+    let config::Riffol {
+        applications: apps,
+        dependencies: deps,
+    } = config::get_config(args).unwrap_or_else(fail);
+
+    distro::install_packages(&deps).unwrap_or_else(fail);
+
+    let signal = chan_signal::notify(signals.as_ref());
+
+    let mut init = init::Init::new(apps);
+
+    init.start().unwrap_or_else(fail);
+
+    loop {
+        let s = signal.recv().unwrap();
+        eprintln!("{}: Received signal {:?}", progname(), s);
+
+        match s {
+            Signal::CHLD => unsafe {
+                libc::wait(std::ptr::null_mut());
+            },
+            _ => break,
+        }
+    }
+
+    init.stop();
+}
+
+fn progname() -> String {
+    match env::current_exe() {
+        Ok(name) => name.as_path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        Err(_) => "(unknown)".to_owned(),
+    }
+}
+
+fn fail<T>(e: String) -> T {
+    eprintln!("{}: {}", progname(), e);
+    exit(1);
+}

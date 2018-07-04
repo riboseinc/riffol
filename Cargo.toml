@@ -2,6 +2,7 @@
 name = "riffol"
 version = "0.1.0"
 authors = ["John Hedges <john@drystone.co.uk>"]
+build = "build.rs"
 
 [dependencies]
 chan-signal = "0.3"
