@@ -1,61 +1,23 @@
 pipeline {
-    agent none
+    agent {
+        dockerfile {
+            dir "ci/${env.distribution}"
+        }
+    }
+    environment {
+        CARGO = "/root/.cargo/bin/cargo"
+        BINARY = "target/release/bin/riffol"
+    }
     stages {
-        stage("Distros") {
-            agent none
-            environment {
-                CARGO = "/root/.cargo/bin/cargo"
-                BINARY = "target/release/bin/riffol"
+        stage("Test") {
+            steps {
+                sh "${env.CARGO} test"
             }
-            parallel {
-                stage("Debian") {
-                    environment {
-                        FS_NAME = "debian"
-                        POLITE_NAME = "Debian"
-                    }
-                    agent {
-                        dockerfile {
-                            dir "ci/${env.FS_NAME}"
-                        }
-                    }
-                    stages {
-                        stage("${env.POLITE_NAME} Test") {
-                            steps {
-                                sh "${env.CARGO} test"
-                            }
-                        }
-                        stage("${env.POLITE_NAME} Build") {
-                            steps {
-                                sh "${env.CARGO} build --release"
-                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
-                            }
-                        }
-                    }
-                }
-                stage("CentOS") {
-                    environment {
-                        FS_NAME = "centos"
-                        POLITE_NAME = "CentOS"
-                    }
-                    agent {
-                        dockerfile {
-                            dir "ci/${env.FS_NAME}"
-                        }
-                    }
-                    stages {
-                        stage("${env.POLITE_NAME} Test") {
-                            steps {
-                                sh "${env.CARGO} test"
-                            }
-                        }
-                        stage("${env.POLITE_NAME} Build") {
-                            steps {
-                                sh "${env.CARGO} build --release"
-                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
-                            }
-                        }
-                    }
-                }
+        }
+        stage("Build") {
+            steps {
+                sh "${env.CARGO} build --release"
+                sh "cp ${env.BINARY} releases/${env.distribution}/"
             }
         }
     }
