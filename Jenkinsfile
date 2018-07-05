@@ -2,6 +2,7 @@ pipeline {
     agent none
     stages {
         stage("Distros") {
+            agent none
             environment {
                 CARGO = "/root/.cargo/bin/cargo"
                 BINARY = "target/release/bin/riffol"
@@ -14,19 +15,19 @@ pipeline {
                     }
                     agent {
                         dockerfile {
-                            dir "ci/${FS_NAME}"
+                            dir "ci/${env.FS_NAME}"
                         }
                     }
                     stages {
-                        stage("${POLITE_NAME} Test") {
+                        stage("${env.POLITE_NAME} Test") {
                             steps {
-                                sh "${CARGO} test"
+                                sh "${env.CARGO} test"
                             }
                         }
-                        stage("${POLITE_NAME} Build") {
+                        stage("${env.POLITE_NAME} Build") {
                             steps {
-                                sh "${CARGO} build --release"
-                                sh "cp ${BINARY} releases/${FS_NAME}/"
+                                sh "${env.CARGO} build --release"
+                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
                             }
                         }
                     }
@@ -38,19 +39,19 @@ pipeline {
                     }
                     agent {
                         dockerfile {
-                            dir "ci/${FS_NAME}"
+                            dir "ci/${env.FS_NAME}"
                         }
                     }
                     stages {
-                        stage("${POLITE_NAME} Test") {
+                        stage("${env.POLITE_NAME} Test") {
                             steps {
-                                sh "${CARGO} test"
+                                sh "${env.CARGO} test"
                             }
                         }
-                        stage("${POLITE_NAME} Build") {
+                        stage("${env.POLITE_NAME} Build") {
                             steps {
-                                sh "${CARGO} build --release"
-                                sh "cp ${BINARY} releases/${FS_NAME}/"
+                                sh "${env.CARGO} build --release"
+                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
                             }
                         }
                     }
