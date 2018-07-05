@@ -50,18 +50,11 @@ pipeline {
                         stage("${POLITE_NAME} Build") {
                             steps {
                                 sh "${CARGO} build --release"
-                                sh "cp ${BINARY} releases/${FS_NAME}/" 
+                                sh "cp ${BINARY} releases/${FS_NAME}/"
                             }
                         }
                     }
                 }
-            }
-        }
-    }
-    centos: {
-        agent {
-            dockerfile {
-                dir "ci/centos"
             }
         }
     }
