@@ -2,7 +2,6 @@ pipeline {
     agent none
     stages {
         stage("Distros") {
-            agent none
             environment {
                 CARGO = "/root/.cargo/bin/cargo"
                 BINARY = "target/release/bin/riffol"
