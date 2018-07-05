@@ -8,56 +8,46 @@ pipeline {
             }
             parallel {
                 stage("Debian") {
+                    agent {
+                        dockerfile {
+                            dir "ci/debian"
+                        }
+                    }
                     environment {
                         FS_NAME = "debian"
                         POLITE_NAME = "Debian"
                     }
                     stages {
                         stage("Test") {
-                            agent {
-                                dockerfile {
-                                    dir "ci/${FS_NAME}"
-                                }
-                            }
                             steps {
-                                sh "${CARGO} test"
+                                sh "${env.CARGO} test"
                             }
                         }
                         stage("Build") {
-                            agent {
-                                dockerfile {
-                                    dir "ci/${FS_NAME}"
-                                }
-                            }
                             steps {
-                                sh "${CARGO} build --release"
-                                sh "cp ${BINARY} releases/${FS_NAME}/"
+                                sh "${env.CARGO} build --release"
+                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
                             }
                         }
                     }
                 }
                 stage("CentOS") {
+                    agent {
+                        dockerfile {
+                            dir "ci/centos"
+                        }
+                    }
                     environment {
                         FS_NAME = "centos"
                         POLITE_NAME = "CentOS"
                     }
                     stages {
                         stage("Test") {
-                            agent {
-                                dockerfile {
-                                    dir "ci/${env.FS_NAME}"
-                                }
-                            }
                             steps {
                                 sh "${env.CARGO} test"
                             }
                         }
                         stage("Build") {
-                            agent {
-                                dockerfile {
-                                    dir "ci/${env.FS_NAME}"
-                                }
-                            }
                             steps {
                                 sh "${env.CARGO} build --release"
                                 sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
