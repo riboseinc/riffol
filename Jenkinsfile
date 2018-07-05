@@ -19,12 +19,12 @@ pipeline {
                         }
                     }
                     stages {
-                        stage("${env.POLITE_NAME} Test") {
+                        stage("Test") {
                             steps {
                                 sh "${env.CARGO} test"
                             }
                         }
-                        stage("${env.POLITE_NAME} Build") {
+                        stage("Build") {
                             steps {
                                 sh "${env.CARGO} build --release"
                                 sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
@@ -43,12 +43,12 @@ pipeline {
                         }
                     }
                     stages {
-                        stage("${env.POLITE_NAME} Test") {
+                        stage("Test") {
                             steps {
                                 sh "${env.CARGO} test"
                             }
                         }
-                        stage("${env.POLITE_NAME} Build") {
+                        stage("Build") {
                             steps {
                                 sh "${env.CARGO} build --release"
                                 sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
