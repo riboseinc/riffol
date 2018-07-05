@@ -14,19 +14,19 @@ pipeline {
                     }
                     agent {
                         dockerfile {
-                            dir "ci/${FS_NAME}"
+                            dir "ci/${env.FS_NAME}"
                         }
                     }
                     stages {
                         stage("Test") {
                             steps {
-                                sh "${CARGO} test"
+                                sh "${env.CARGO} test"
                             }
                         }
                         stage("Build") {
                             steps {
-                                sh "${CARGO} build --release"
-                                sh "cp ${BINARY} releases/${FS_NAME}/"
+                                sh "${env.CARGO} build --release"
+                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
                             }
                         }
                     }
@@ -38,19 +38,19 @@ pipeline {
                     }
                     agent {
                         dockerfile {
-                            dir "ci/${FS_NAME}"
+                            dir "ci/${env.FS_NAME}"
                         }
                     }
                     stages {
                         stage("Test") {
                             steps {
-                                sh "${CARGO} test"
+                                sh "${env.CARGO} test"
                             }
                         }
                         stage("Build") {
                             steps {
-                                sh "${CARGO} build --release"
-                                sh "cp ${BINARY} releases/${FS_NAME}/"
+                                sh "${env.CARGO} build --release"
+                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
                             }
                         }
                     }
