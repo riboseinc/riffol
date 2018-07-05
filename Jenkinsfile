@@ -3,7 +3,7 @@ pipeline {
     stages {
         stage("Distros") {
             environment {
-                CARGO = "/root/.cargo/bin/cargo"
+                CARGO = "~/.cargo/bin/cargo"
                 BINARY = "target/release/bin/riffol"
             }
             parallel {
