@@ -16,22 +16,22 @@ pipeline {
                         stage("Test") {
                             agent {
                                 dockerfile {
-                                    dir "ci/${env.FS_NAME}"
+                                    dir "ci/${FS_NAME}"
                                 }
                             }
                             steps {
-                                sh "${env.CARGO} test"
+                                sh "${CARGO} test"
                             }
                         }
                         stage("Build") {
                             agent {
                                 dockerfile {
-                                    dir "ci/${env.FS_NAME}"
+                                    dir "ci/${FS_NAME}"
                                 }
                             }
                             steps {
-                                sh "${env.CARGO} build --release"
-                                sh "cp ${env.BINARY} releases/${env.FS_NAME}/"
+                                sh "${CARGO} build --release"
+                                sh "cp ${BINARY} releases/${FS_NAME}/"
                             }
                         }
                     }
