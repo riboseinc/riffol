@@ -9,3 +9,4 @@ RUN git clone https://github.com/vstakhov/libucl.git \
     && ./autogen.sh \
     && ./configure --prefix=/usr \
     && make install
+    && ldconfig
