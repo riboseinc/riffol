@@ -14,9 +14,7 @@ pipeline {
                         }
                     }
                     steps {
-                        sh "${env.CARGO} clean"
-                        sh "${env.CARGO} update"
-                        sh "${env.CARGO} test"
+                        sh "${env.CARGO} clean && ${env.CARGO} update && ${env.CARGO} test"
                     }
                 }
                 stage("CentOS") {
@@ -26,9 +24,7 @@ pipeline {
                         }
                     }
                     steps {
-                        sh "${env.CARGO} clean"
-                        sh "${env.CARGO} update"
-                        sh "${env.CARGO} test"
+                        sh "${env.CARGO} clean && ${env.CARGO} update && ${env.CARGO} test"
                     }
                 }
             }
