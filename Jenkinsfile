@@ -13,13 +13,10 @@ pipeline {
                             dir "ci/debian"
                         }
                     }
-                    stages {
-                        stage("Test") {
-                            steps {
-                                sh "${env.CARGO} test"
-                                sh "${env.CARGO} test"
-                            }
-                        }
+                    steps {
+                        sh "${env.CARGO} clean"
+                        sh "${env.CARGO} update"
+                        sh "${env.CARGO} test"
                     }
                 }
                 stage("CentOS") {
@@ -28,13 +25,10 @@ pipeline {
                             dir "ci/centos"
                         }
                     }
-                    stages {
-                        stage("Test") {
-                            steps {
-                                sh "${env.CARGO} clean"
-                                sh "${env.CARGO} test"
-                            }
-                        }
+                    steps {
+                        sh "${env.CARGO} clean"
+                        sh "${env.CARGO} update"
+                        sh "${env.CARGO} test"
                     }
                 }
             }
