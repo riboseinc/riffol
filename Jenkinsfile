@@ -6,7 +6,7 @@ pipeline {
                 CARGO = "~/.cargo/bin/cargo"
                 BINARY = "target/release/bin/riffol"
             }
-            parallel {
+            stages {
                 stage("Debian") {
                     agent {
                         dockerfile {
