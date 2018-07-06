@@ -7,5 +7,5 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 RUN git clone https://github.com/vstakhov/libucl.git \
     && cd libucl \
     && ./autogen.sh \
-    && ./configure \
+    && ./configure --prefix=/usr \
     && make install

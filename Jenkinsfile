@@ -5,7 +5,6 @@ pipeline {
             environment {
                 CARGO = "~/.cargo/bin/cargo"
                 BINARY = "target/release/bin/riffol"
-                LD_LIBRARY_PATH = "/usr/local/bin" // libucl.so
             }
             stages {
                 stage("Debian") {
