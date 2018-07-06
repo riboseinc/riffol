@@ -17,6 +17,7 @@ pipeline {
                         stage("Test") {
                             steps {
                                 sh "${env.CARGO} test"
+                                sh "${env.CARGO} test"
                             }
                         }
                     }
@@ -30,6 +31,7 @@ pipeline {
                     stages {
                         stage("Test") {
                             steps {
+                                sh "${env.CARGO} clean"
                                 sh "${env.CARGO} test"
                             }
                         }
