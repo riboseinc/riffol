@@ -11,4 +11,4 @@ before_script:
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then ./configure --prefix=/usr; fi
   - make
   - sudo make install
-  - sudo ldconfig
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo ldconfig --prefix=/usr; fi
