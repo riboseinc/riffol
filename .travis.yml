@@ -1,0 +1,13 @@
+language: rust
+sudo: enabled
+os:
+  - osx
+  - linux
+before-script:
+  - git clone https://github.com/vstakhov/libucl.git
+  - cd libucl
+  - ./autogen.sh
+  - ./configure --prefix=/usr
+  - make
+  - sudo make install
+  - sudo ldconfig
