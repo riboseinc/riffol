@@ -3,7 +3,7 @@ sudo: enabled
 os:
   - osx
   - linux
-before-install:
+before_script:
   - git clone https://github.com/vstakhov/libucl.git
   - cd libucl
   - ./autogen.sh
