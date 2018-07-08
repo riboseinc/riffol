@@ -39,22 +39,7 @@ use chan_signal::Signal;
 use std::env;
 use std::process::exit;
 
-static PR_SET_CHILD_SUBREAPER: libc::c_int = 36;
-
 pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
-    let mut signals = vec![Signal::INT, Signal::TERM];
-
-    if unsafe { libc::getpid() } != 1 {
-        if unsafe { libc::prctl(PR_SET_CHILD_SUBREAPER, 1) } == 0 {
-            signals.push(Signal::CHLD);
-        } else {
-            eprintln!(
-                "{}: Not PID 1 and couldn't set PR_CHILD_SUBREAPER",
-                progname(),
-            );
-        }
-    }
-
     let config::Riffol {
         applications: apps,
         dependencies: deps,
@@ -62,6 +47,26 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
     distro::install_packages(&deps).unwrap_or_else(fail);
 
+    let mut signals = vec![];
+
+    #[cfg(target_os = "linux")]
+    {
+        static PR_SET_CHILD_SUBREAPER: libc::c_int = 36;
+
+        if unsafe { libc::getpid() } != 1 {
+            if unsafe { libc::prctl(PR_SET_CHILD_SUBREAPER, 1) } == 0 {
+                signals.push(Signal::CHLD);
+            } else {
+                eprintln!(
+                    "{}: Not PID 1 and couldn't set PR_CHILD_SUBREAPER",
+                    progname(),
+                );
+            }
+        }
+    }
+
+    signals.push(Signal::INT);
+    signals.push(Signal::TERM);
     let signal = chan_signal::notify(signals.as_ref());
 
     let mut init = init::Init::new(apps);

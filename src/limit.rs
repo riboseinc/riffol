@@ -47,9 +47,9 @@ pub fn setlimit(rlimit: &RLimit) {
         Limit::Infinity => libc::RLIM_INFINITY,
     };
     unsafe {
-        let _result = libc::setrlimit64(
+        let _result = libc::setrlimit(
             resource,
-            &libc::rlimit64 {
+            &libc::rlimit {
                 rlim_cur: limit,
                 rlim_max: limit,
             },

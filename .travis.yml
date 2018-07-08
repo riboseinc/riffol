@@ -1,0 +1,14 @@
+language: rust
+sudo: enabled
+os:
+  - osx
+  - linux
+before_script:
+  - git clone https://github.com/vstakhov/libucl.git
+  - cd libucl
+  - ./autogen.sh
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then ./configure --prefix=/usr/local; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then ./configure --prefix=/usr; fi
+  - make
+  - sudo make install
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo ldconfig; fi
