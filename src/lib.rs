@@ -34,6 +34,7 @@ mod distro;
 mod health;
 mod init;
 mod limit;
+mod stream;
 
 use chan_signal::Signal;
 use std::env;

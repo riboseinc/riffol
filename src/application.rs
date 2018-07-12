@@ -21,15 +21,22 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+extern crate syslog;
+
+use self::syslog::{Formatter3164, Logger, LoggerBackend, Severity::*};
 use health::IntervalHealthCheck;
 use limit::{setlimit, RLimit};
 use std::collections::HashMap;
 use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, LineWriter, Write};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
+use stream;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(field_identifier, rename_all = "lowercase")]
@@ -48,8 +55,12 @@ pub struct Application {
     pub healthchecks: Vec<IntervalHealthCheck>,
     pub healthcheckfail: AppAction,
     pub limits: Vec<RLimit>,
+    pub stdout: Option<stream::Stream>,
+    pub stderr: Option<stream::Stream>,
     pub state: AppState,
-    pub checks: Vec<(mpsc::Sender<()>, thread::JoinHandle<()>)>,
+    pub check_threads: Vec<(mpsc::Sender<()>, thread::JoinHandle<()>)>,
+    pub stdout_thread: Option<thread::JoinHandle<()>>,
+    pub stderr_thread: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -71,20 +82,30 @@ impl Application {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())
             })
+            .stdout(stdio(&self.stdout))
+            .stderr(stdio(&self.stderr))
             .spawn()
         {
-            Ok(mut child) => match child.wait() {
-                Ok(s) if s.success() => {
-                    log(format!("Successfully spawned {}", self.exec));
-                    self.state = AppState::Running;
-                    true
+            Ok(mut child) => {
+                if let Some(s) = child.stdout.as_ref() {
+                    self.stdout_thread = spawn_stream_thread(&self.stdout, s.as_raw_fd());
                 }
-                _ => {
-                    log(format!("Application exited with error {}", self.exec));
-                    self.state = AppState::Failed;
-                    false
+                if let Some(s) = child.stderr.as_ref() {
+                    self.stderr_thread = spawn_stream_thread(&self.stderr, s.as_raw_fd());
                 }
-            },
+                match child.wait() {
+                    Ok(ref s) if s.success() => {
+                        log(format!("Successfully spawned {}", self.exec));
+                        self.state = AppState::Running;
+                        true
+                    }
+                    _ => {
+                        log(format!("Application exited with error {}", self.exec));
+                        self.state = AppState::Failed;
+                        false
+                    }
+                }
+            }
             Err(_) => {
                 log(format!("Failed to spawn {}", self.exec));
                 self.state = AppState::Failed;
@@ -115,6 +136,8 @@ impl Application {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())
             })
+            .stdout(stdio(&self.stdout))
+            .stderr(stdio(&self.stderr))
             .spawn()
             .and_then(|mut c| c.wait());
     }
@@ -124,7 +147,7 @@ impl Application {
         fail_tx: mpsc::Sender<Option<T>>,
         fail_msg: T,
     ) -> () {
-        self.checks = self.healthchecks
+        self.check_threads = self.healthchecks
             .iter()
             .map(|c| {
                 let check = c.clone();
@@ -161,10 +184,93 @@ impl Application {
     }
 
     pub fn stop_check_threads(&mut self) {
-        for (tx, h) in self.checks.drain(..) {
+        for (tx, h) in self.check_threads.drain(..) {
             let _t = tx.send(());
             let _t = h.join();
         }
+    }
+}
+
+fn stdio(stream: &Option<stream::Stream>) -> Stdio {
+    match stream {
+        Some(stream) => match stream {
+            stream::Stream::File { filename: f } => {
+                if f == "/dev/null" {
+                    Stdio::null()
+                } else {
+                    Stdio::piped()
+                }
+            }
+            _ => Stdio::piped(),
+        },
+        None => Stdio::inherit(),
+    }
+}
+
+fn spawn_stream_thread(
+    stream: &Option<stream::Stream>,
+    source: RawFd,
+) -> Option<thread::JoinHandle<()>> {
+    let source = BufReader::new(unsafe { File::from_raw_fd(source) });
+    match stream {
+        Some(stream) => match stream {
+            stream::Stream::File { filename } => {
+                let f = filename.to_owned();
+                Some(thread::spawn(move || {
+                    let mut sink =
+                        LineWriter::new(OpenOptions::new().append(true).open(f).unwrap());
+
+                    for l in source.lines() {
+                        sink.write(l.as_ref().unwrap().as_bytes()).unwrap();
+                    }
+                }))
+            }
+            stream::Stream::Syslog {
+                address,
+                facility,
+                severity,
+            } => {
+                let formatter = Formatter3164 {
+                    facility: facility.clone(),
+                    hostname: None,
+                    process: String::from("riffol"),
+                    pid: 0,
+                };
+                let mut logger: syslog::Result<
+                    Logger<LoggerBackend, String, Formatter3164>,
+                > = match address {
+                    stream::Address::Unix(address) => match address {
+                        Some(address) => syslog::unix_custom(formatter, address),
+                        None => syslog::unix(formatter),
+                    },
+                    stream::Address::Tcp(server) => syslog::tcp(formatter, server),
+                    stream::Address::Udp { server, local } => syslog::udp(formatter, local, server),
+                };
+
+                match logger {
+                    Ok(mut logger) => {
+                        let severity = severity.clone();
+                        Some(thread::spawn(move || {
+                            for l in source.lines() {
+                                let l = l.unwrap();
+                                match severity {
+                                    x if x == LOG_EMERG as u32 => logger.emerg(l),
+                                    x if x == LOG_ALERT as u32 => logger.alert(l),
+                                    x if x == LOG_CRIT as u32 => logger.crit(l),
+                                    x if x == LOG_ERR as u32 => logger.err(l),
+                                    x if x == LOG_WARNING as u32 => logger.warning(l),
+                                    x if x == LOG_NOTICE as u32 => logger.notice(l),
+                                    x if x == LOG_INFO as u32 => logger.info(l),
+                                    _ => logger.debug(l),
+                                }.unwrap();
+                            }
+                        }))
+                    }
+                    Err(_) => None,
+                }
+            }
+        },
+        _ => None,
     }
 }
 

@@ -22,6 +22,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 extern crate nereon;
+extern crate syslog;
 
 use application::{self, AppAction, AppState};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
@@ -30,8 +31,11 @@ use serde_json;
 use std::collections::HashMap;
 use std::fs;
 use std::iter::Iterator;
+use std::net::SocketAddr;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
+use stream;
 
 #[derive(Deserialize)]
 struct Config {
@@ -77,6 +81,8 @@ struct Application {
     healthcheckfail: AppAction,
     #[serde(default = "Vec::new")]
     limits: Vec<String>,
+    stdout: Option<Stream>,
+    stderr: Option<Stream>,
 }
 
 #[derive(Deserialize)]
@@ -107,6 +113,63 @@ struct HealthChecks {
     checks: Vec<String>,
     timeout: u64,
     interval: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SyslogSeverity {
+    EMERG,
+    ALERT,
+    CRIT,
+    ERR,
+    WARNING,
+    NOTICE,
+    INFO,
+    DEBUG,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SyslogFacility {
+    KERN,
+    USER,
+    MAIL,
+    DAEMON,
+    AUTH,
+    SYSLOG,
+    LPR,
+    NEWS,
+    UUCP,
+    CRON,
+    AUTHPRIV,
+    FTP,
+    LOCAL0,
+    LOCAL1,
+    LOCAL2,
+    LOCAL3,
+    LOCAL4,
+    LOCAL5,
+    LOCAL6,
+    LOCAL7,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Stream {
+    File {
+        filename: String,
+    },
+    Syslog {
+        socket: Option<String>,
+        facility: Option<SyslogFacility>,
+        severity: Option<SyslogSeverity>,
+    },
+    RSyslog {
+        server: String,
+        local: Option<String>,
+        facility: Option<SyslogFacility>,
+        severity: Option<SyslogSeverity>,
+    },
 }
 
 #[derive(Debug)]
@@ -182,6 +245,22 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                 };
                                 env.extend(ap.env.clone());
 
+                                let stderr = match ap.stderr.as_ref() {
+                                    None => None,
+                                    Some(s) => match mk_stream(&s) {
+                                        Ok(s) => Some(s),
+                                        Err(e) => return Err(format!("Invalid stream {}", e)),
+                                    },
+                                };
+
+                                let stdout = match ap.stdout.as_ref() {
+                                    None => None,
+                                    Some(s) => match mk_stream(&s) {
+                                        Ok(s) => Some(s),
+                                        Err(e) => return Err(format!("Invalid stream {}", e)),
+                                    },
+                                };
+
                                 riffol.applications.push(application::Application {
                                     exec: ap.exec.clone(),
                                     dir: ap.dir.clone().unwrap_or("/tmp".to_owned()),
@@ -192,8 +271,12 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     healthchecks: healthchecks,
                                     healthcheckfail: ap.healthcheckfail.clone(),
                                     limits: limits,
-                                    checks: vec![],
+                                    stdout: stdout,
+                                    stderr: stderr,
                                     state: AppState::Stopped,
+                                    check_threads: vec![],
+                                    stdout_thread: None,
+                                    stderr_thread: None,
                                 })
                             }
                             None => return Err(format!("No such application \"{}\"", ap_name)),
@@ -311,6 +394,90 @@ fn get_limits(
         RLimit::Memory(mem),
         RLimit::Files(files),
     ])
+}
+
+fn mk_stream(stream: &Stream) -> Result<stream::Stream, String> {
+    match stream {
+        Stream::File { filename: n } => Ok(stream::Stream::File {
+            filename: n.to_owned(),
+        }),
+        Stream::Syslog {
+            socket,
+            facility,
+            severity,
+        } => Ok(stream::Stream::Syslog {
+            address: stream::Address::Unix(socket.to_owned()),
+            facility: config_to_syslog_facility(facility),
+            severity: config_to_syslog_severity(severity),
+        }),
+        Stream::RSyslog {
+            server,
+            local,
+            facility: f,
+            severity: s,
+        } => Ok(stream::Stream::Syslog {
+            address: {
+                if let Ok(server) = SocketAddr::from_str(server) {
+                    match local {
+                        Some(local) => match SocketAddr::from_str(local) {
+                            Ok(local) => stream::Address::Udp {
+                                server: server,
+                                local: local,
+                            },
+                            Err(_) => return Err(format!("Not a valid inet address: {}", local)),
+                        },
+                        None => stream::Address::Tcp(server),
+                    }
+                } else {
+                    return Err(format!("Not a valid inet address: {}", server));
+                }
+            },
+            facility: config_to_syslog_facility(f),
+            severity: config_to_syslog_severity(s),
+        }),
+    }
+}
+
+fn config_to_syslog_facility(f: &Option<SyslogFacility>) -> syslog::Facility {
+    f.as_ref()
+        .map(|f| match f {
+            SyslogFacility::KERN => syslog::Facility::LOG_KERN,
+            SyslogFacility::USER => syslog::Facility::LOG_USER,
+            SyslogFacility::MAIL => syslog::Facility::LOG_MAIL,
+            SyslogFacility::DAEMON => syslog::Facility::LOG_DAEMON,
+            SyslogFacility::AUTH => syslog::Facility::LOG_AUTH,
+            SyslogFacility::SYSLOG => syslog::Facility::LOG_SYSLOG,
+            SyslogFacility::LPR => syslog::Facility::LOG_LPR,
+            SyslogFacility::NEWS => syslog::Facility::LOG_NEWS,
+            SyslogFacility::UUCP => syslog::Facility::LOG_UUCP,
+            SyslogFacility::CRON => syslog::Facility::LOG_CRON,
+            SyslogFacility::AUTHPRIV => syslog::Facility::LOG_AUTHPRIV,
+            SyslogFacility::FTP => syslog::Facility::LOG_FTP,
+            SyslogFacility::LOCAL0 => syslog::Facility::LOG_LOCAL0,
+            SyslogFacility::LOCAL1 => syslog::Facility::LOG_LOCAL1,
+            SyslogFacility::LOCAL2 => syslog::Facility::LOG_LOCAL2,
+            SyslogFacility::LOCAL3 => syslog::Facility::LOG_LOCAL3,
+            SyslogFacility::LOCAL4 => syslog::Facility::LOG_LOCAL4,
+            SyslogFacility::LOCAL5 => syslog::Facility::LOG_LOCAL5,
+            SyslogFacility::LOCAL6 => syslog::Facility::LOG_LOCAL6,
+            SyslogFacility::LOCAL7 => syslog::Facility::LOG_LOCAL7,
+        })
+        .unwrap_or(syslog::Facility::LOG_DAEMON)
+}
+
+fn config_to_syslog_severity(s: &Option<SyslogSeverity>) -> u32 {
+    s.as_ref()
+        .map(|s| match s {
+            SyslogSeverity::EMERG => syslog::Severity::LOG_EMERG,
+            SyslogSeverity::ALERT => syslog::Severity::LOG_ALERT,
+            SyslogSeverity::CRIT => syslog::Severity::LOG_CRIT,
+            SyslogSeverity::ERR => syslog::Severity::LOG_ERR,
+            SyslogSeverity::WARNING => syslog::Severity::LOG_WARNING,
+            SyslogSeverity::NOTICE => syslog::Severity::LOG_NOTICE,
+            SyslogSeverity::INFO => syslog::Severity::LOG_INFO,
+            SyslogSeverity::DEBUG => syslog::Severity::LOG_DEBUG,
+        })
+        .unwrap_or(syslog::Severity::LOG_DEBUG) as u32
 }
 
 #[cfg(test)]
