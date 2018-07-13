@@ -21,20 +21,25 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+extern crate libc;
 extern crate syslog;
 
 use self::syslog::{Formatter3164, Logger, LoggerBackend, Severity::*};
 use health::IntervalHealthCheck;
 use limit::{setlimit, RLimit};
+use std;
 use std::collections::HashMap;
 use std::env;
 use std::fs::{File, OpenOptions};
+use std::io::Read;
 use std::io::{BufRead, BufReader, LineWriter, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 use stream;
 
@@ -211,18 +216,29 @@ fn spawn_stream_thread(
     stream: &Option<stream::Stream>,
     source: RawFd,
 ) -> Option<thread::JoinHandle<()>> {
-    let source = BufReader::new(unsafe { File::from_raw_fd(source) });
+    let mut source = unsafe { File::from_raw_fd(libc::dup(source)) };
     match stream {
         Some(stream) => match stream {
             stream::Stream::File { filename } => {
                 let f = filename.to_owned();
                 Some(thread::spawn(move || {
-                    let mut sink =
-                        LineWriter::new(OpenOptions::new().append(true).open(f).unwrap());
-
-                    for l in source.lines() {
-                        sink.write(l.as_ref().unwrap().as_bytes()).unwrap();
+                    let mut sink = LineWriter::new(
+                        OpenOptions::new()
+                            .create_new(true)
+                            .append(true)
+                            .open(f)
+                            .unwrap(),
+                    );
+                    let mut byte = [0; 1];
+                    println!("[{:?}]", source.read_exact(&mut byte));
+                    loop {
+                        std::thread::sleep(Duration::from_millis(10));
                     }
+                    /*for l in source.lines() {
+                        println!("{:?}", l);
+                        sink.write(l.as_ref().unwrap().as_bytes()).unwrap();
+                    }*/
+                    println!("done");
                 }))
             }
             stream::Stream::Syslog {
@@ -251,7 +267,7 @@ fn spawn_stream_thread(
                     Ok(mut logger) => {
                         let severity = severity.clone();
                         Some(thread::spawn(move || {
-                            for l in source.lines() {
+                            /*                            for l in source.lines() {
                                 let l = l.unwrap();
                                 match severity {
                                     x if x == LOG_EMERG as u32 => logger.emerg(l),
@@ -263,7 +279,7 @@ fn spawn_stream_thread(
                                     x if x == LOG_INFO as u32 => logger.info(l),
                                     _ => logger.debug(l),
                                 }.unwrap();
-                            }
+                            }*/
                         }))
                     }
                     Err(_) => None,
