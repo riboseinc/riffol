@@ -83,7 +83,7 @@ directory under `$CARGO_HOME` - usually `~/.cargo/bin/riffol`.
 Riffol requires a configuration file. The default location of this file is
 `/etc/riffol.conf`.
 
-This location can be specied either via the `RIFFOL_CONFIG` environment
+This location can be specified either via the `RIFFOL_CONFIG` environment
 variable or by using the `-f` command line flag.
 
 == Configuration
