@@ -84,7 +84,7 @@ Riffol requires a configuration file. The default location of this file is
 `/etc/riffol.conf`.
 
 This location can be specied either via the `RIFFOL_CONFIG` environment
-variable or by using `riffol`'s `-f` command line flag.
+variable or by using the `-f` command line flag.
 
 == Configuration
 
