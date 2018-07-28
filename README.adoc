@@ -7,16 +7,6 @@ Unix-like systems or as an `init` system for containers
 Riffol can be configured by creating application groups that consist of
 applications, health checks and dependency checks.
 
-Riffol uses the unified configuration model from
-https://github.com/riboseinc/event-configuration-models for its
-configuration syntax definition, startup configuration and
-also runtime configuration.
-
-Riffol is implemented in Rust.
-
-
-== Components
-
 [source]
 ----
    +--------+
@@ -38,6 +28,63 @@ Riffol is implemented in Rust.
                    +--------+                    +----------+
 ----
 
+Riffol uses the unified configuration model from
+https://github.com/riboseinc/event-configuration-models for its
+configuration syntax definition, startup configuration and
+also runtime configuration.
+
+Riffol is implemented in Rust.
+
+== Installation
+
+=== Prerequisites
+
+Riffol depends on https://github.com/vstakhov/libucl[libucl] and `pidof`.
+
+Libucl requires building from source. Make sure `autoconf`, `automake`
+and `libtool` are available and run the following:
+
+[source,shell]
+----
+git clone https://github.com/vstakhov/libucl
+cd libucl
+./autogen.sh
+./configure
+make
+sudo make install
+sudo ldconfig
+----
+
+`pidof` is part of `sysvinit-tools` which can be installed via the
+package manager on most systems.
+
+=== Ready-made Executables
+
+Riffol binaries can be downloaded directly from
+http://github.com/riboseinc/riffol/releases[GitHub].
+
+=== Building From Source
+
+Make sure there is a Rust environment installed. Otherwise follow the
+https://www.rust-lang.org/en-US/install.html[Rust installation guide].
+
+[source,shell]
+----
+cargo install --git https:/github.com/riboseinc/riffol
+----
+
+This command will build a `riffol` binary and store it in the `bin`
+directory under `$CARGO_HOME` - usually `~/.cargo/bin/riffol`.
+
+== Usage
+
+ riffol [-f config-file]
+
+Riffol requires a configuration file. The default location of this file is
+`/etc/riffol.conf`.
+
+This location can be specified either via the `RIFFOL_CONFIG` environment
+variable or by using the `-f` command line flag.
 
 == Configuration
 
