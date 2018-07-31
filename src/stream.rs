@@ -294,16 +294,16 @@ mod test {
     fn test1() {
         let handler = super::Handler::new();
         let mut child1 = Command::new("ping")
-            .arg("-c4")
-            .arg("8.8.8.8")
+            .arg("-c2")
+            .arg("8.8.4.4")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        let mut child2 = Command::new("ping")
-            .arg("-c4")
-            .arg("8.8.4.4")
+        let mut child2 = Command::new("ls")
+            .arg("-l")
+            .arg("/")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
