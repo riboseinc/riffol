@@ -22,24 +22,16 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 extern crate libc;
-extern crate syslog;
 
-use self::syslog::{Formatter3164, Logger, LoggerBackend, Severity::*};
 use health::IntervalHealthCheck;
 use limit::{setlimit, RLimit};
-use std;
 use std::collections::HashMap;
-use std::env;
-use std::fs::{File, OpenOptions};
-use std::io::Read;
-use std::io::{BufRead, BufReader, LineWriter, Write};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::net::UnixStream;
+use std::io;
+use std::os::unix::io::IntoRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 use std::time::Instant;
 use stream;
 
@@ -76,9 +68,11 @@ pub enum AppState {
 }
 
 impl Application {
-    pub fn start(&mut self) -> bool {
+    pub fn start(&mut self, stream_handler: &stream::Handler) -> io::Result<()> {
         let limits = self.limits.clone();
-        match Command::new(&self.exec)
+        self.state = AppState::Failed;
+
+        let mut child = Command::new(&self.exec)
             .arg(&self.start)
             .current_dir(&self.dir)
             .env_clear()
@@ -89,33 +83,33 @@ impl Application {
             })
             .stdout(stdio(&self.stdout))
             .stderr(stdio(&self.stderr))
-            .spawn()
-        {
-            Ok(mut child) => {
-                if let Some(s) = child.stdout.as_ref() {
-                    self.stdout_thread = spawn_stream_thread(&self.stdout, s.as_raw_fd());
-                }
-                if let Some(s) = child.stderr.as_ref() {
-                    self.stderr_thread = spawn_stream_thread(&self.stderr, s.as_raw_fd());
-                }
-                match child.wait() {
-                    Ok(ref s) if s.success() => {
-                        log(format!("Successfully spawned {}", self.exec));
-                        self.state = AppState::Running;
-                        true
-                    }
-                    _ => {
-                        log(format!("Application exited with error {}", self.exec));
-                        self.state = AppState::Failed;
-                        false
-                    }
-                }
+            .spawn()?;
+
+        if let Some(stdout) = child.stdout.take() {
+            if let Err(e) =
+                stream_handler.add_stream(stdout.into_raw_fd(), self.stdout.as_ref().unwrap())
+            {
+                warn!("Failed to capture stdout for {} ({})", self.exec, e);
             }
-            Err(_) => {
-                log(format!("Failed to spawn {}", self.exec));
-                self.state = AppState::Failed;
-                false
+        }
+        if let Some(stderr) = child.stderr.take() {
+            if let Err(e) =
+                stream_handler.add_stream(stderr.into_raw_fd(), self.stderr.as_ref().unwrap())
+            {
+                warn!("Failed to capture stderr for {} ({})", self.exec, e);
             }
+        }
+        let status = child.wait()?;
+
+        match status.success() {
+            true => {
+                self.state = AppState::Running;
+                Ok(())
+            }
+            false => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Abnormal exit status ({})", status),
+            )),
         }
     }
 
@@ -165,17 +159,17 @@ impl Application {
                         match rx.recv_timeout(next - Instant::now()) {
                             // Ok(()) means we received the 'kill' message
                             Ok(()) => {
-                                log(format!("Cancelling {}.", check.to_string()));
+                                info!("Cancelling {}.", check.to_string());
                                 break;
                             }
                             // otherwise we timeout so proceed with the check
                             _ => {
                                 next += check.interval;
-                                log(format!("{}.", check.to_string()));
+                                debug!("{}.", check.to_string());
                                 match check.do_check() {
                                     Ok(_) => (),
                                     Err(e) => {
-                                        log(format!("{}. {}.", check.to_string(), e));
+                                        warn!("{}. {}.", check.to_string(), e);
                                         let _t = fail_tx.send(Some(fail_msg.clone()));
                                     }
                                 }
@@ -210,87 +204,4 @@ fn stdio(stream: &Option<stream::Stream>) -> Stdio {
         },
         None => Stdio::inherit(),
     }
-}
-
-fn spawn_stream_thread(
-    stream: &Option<stream::Stream>,
-    source: RawFd,
-) -> Option<thread::JoinHandle<()>> {
-    let mut source = unsafe { File::from_raw_fd(libc::dup(source)) };
-    match stream {
-        Some(stream) => match stream {
-            stream::Stream::File { filename } => {
-                let f = filename.to_owned();
-                Some(thread::spawn(move || {
-                    let mut sink = LineWriter::new(
-                        OpenOptions::new()
-                            .create_new(true)
-                            .append(true)
-                            .open(f)
-                            .unwrap(),
-                    );
-                    let mut byte = [0; 1];
-                    println!("[{:?}]", source.read_exact(&mut byte));
-                    loop {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    /*for l in source.lines() {
-                        println!("{:?}", l);
-                        sink.write(l.as_ref().unwrap().as_bytes()).unwrap();
-                    }*/
-                    println!("done");
-                }))
-            }
-            stream::Stream::Syslog {
-                address,
-                facility,
-                severity,
-            } => {
-                let formatter = Formatter3164 {
-                    facility: facility.clone(),
-                    hostname: None,
-                    process: String::from("riffol"),
-                    pid: 0,
-                };
-                let mut logger: syslog::Result<
-                    Logger<LoggerBackend, String, Formatter3164>,
-                > = match address {
-                    stream::Address::Unix(address) => match address {
-                        Some(address) => syslog::unix_custom(formatter, address),
-                        None => syslog::unix(formatter),
-                    },
-                    stream::Address::Tcp(server) => syslog::tcp(formatter, server),
-                    stream::Address::Udp { server, local } => syslog::udp(formatter, local, server),
-                };
-
-                match logger {
-                    Ok(mut logger) => {
-                        let severity = severity.clone();
-                        Some(thread::spawn(move || {
-                            /*                            for l in source.lines() {
-                                let l = l.unwrap();
-                                match severity {
-                                    x if x == LOG_EMERG as u32 => logger.emerg(l),
-                                    x if x == LOG_ALERT as u32 => logger.alert(l),
-                                    x if x == LOG_CRIT as u32 => logger.crit(l),
-                                    x if x == LOG_ERR as u32 => logger.err(l),
-                                    x if x == LOG_WARNING as u32 => logger.warning(l),
-                                    x if x == LOG_NOTICE as u32 => logger.notice(l),
-                                    x if x == LOG_INFO as u32 => logger.info(l),
-                                    _ => logger.debug(l),
-                                }.unwrap();
-                            }*/
-                        }))
-                    }
-                    Err(_) => None,
-                }
-            }
-        },
-        _ => None,
-    }
-}
-
-fn log(s: String) {
-    let arg0 = env::args().next().unwrap();
-    eprintln!("{}: {}", arg0, s);
 }

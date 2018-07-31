@@ -24,6 +24,7 @@
 use application::{AppAction, AppState, Application};
 use std::sync::{mpsc, Arc, Mutex};
 use std::{env, thread};
+use stream;
 
 type AppMutex = Arc<Mutex<Application>>;
 
@@ -31,6 +32,7 @@ pub struct Init {
     applications: Vec<AppMutex>,
     fail_tx: mpsc::Sender<Option<AppMutex>>,
     thread: Option<thread::JoinHandle<()>>,
+    stream_handler: stream::Handler,
 }
 
 impl Init {
@@ -62,6 +64,7 @@ impl Init {
                 .collect(),
             fail_tx: fail_tx,
             thread: Some(thread::spawn(healthcheck_fn)),
+            stream_handler: stream::Handler::new(),
         }
     }
 
@@ -71,10 +74,12 @@ impl Init {
             .iter()
             .map(|ap_mutex| {
                 let mut ap = ap_mutex.lock().unwrap();
-                if !ap.start() {
+                if let Err(e) = ap.start(&self.stream_handler) {
+                    error!("Failed to spawn application {} ({})", ap.exec, e);
                     return false;
                 }
                 ap.spawn_check_threads(self.fail_tx.clone(), Arc::clone(&ap_mutex));
+                info!("Successfully spawned application {}", ap.exec);
                 true
             })
             .any(|b| !b)

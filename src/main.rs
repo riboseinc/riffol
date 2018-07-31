@@ -22,7 +22,10 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 extern crate riffol;
+extern crate stderrlog;
 
 fn main() {
+    stderrlog::new().module(module_path!()).init().unwrap();
+
     riffol::riffol(std::env::args());
 }
