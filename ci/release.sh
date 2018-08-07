@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash -lx
 
 if ! jq --version >/dev/null 2>&1 ; then
     echo "No jq in \$PATH" 1>&2
@@ -35,11 +35,10 @@ release_id=$(
 # create a release if none already for this version
 if [ -z $release_id ]; then
     echo "Creating release for $version"
-    release_id=$(curl -s -X POST -d@- $release?access_token=$OAUTH | jq -r '"\(.id)"' 2>/dev/null) <<EOF
-{
-    "tag_name": "$version"
-}
-EOF
+    release_id=$(curl -s -X POST -d '{"tag_name":"$version"}' $release?access_token=$OAUTH | jq -r '"\(.id)"' 2>/dev/null)
+
+    echo "Release ID: $release_id"
+
     if [ "$release_id" = "null" ] || [ -z $release_id ]; then
         echo "Failed to find/create release" 1>&2
         exit 1
