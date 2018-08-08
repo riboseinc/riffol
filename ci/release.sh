@@ -35,7 +35,8 @@ release_id=$(
 # create a release if none already for this version
 if [ -z $release_id ]; then
     echo "Creating release for $version"
-    release_id=$(curl -s -X POST -d '{"tag_name":"$version"}' $release?access_token=$OAUTH | jq -r '"\(.id)"' 2>/dev/null)
+
+    release_id=$(curl -s -X POST -d '{"tag_name":"'$version'"}' $release?access_token=$OAUTH | jq -r '"\(.id)"' 2>/dev/null)
 
     echo "Release ID: $release_id"
 
@@ -50,8 +51,11 @@ fi
 # get upload url
 upload=$(curl -s $release/$release_id?access_token=$OAUTH | jq -r '"\(.upload_url)"' | cut -d'{' -f1)
 for i in assets/*.tar.gz; do
+    echo "Asset: $i"
+
     if [ -f $i ]; then
         asset_name=$(basename $i)
+        echo "Asset name: $asset_name"
         asset_id=$(
             curl -s $release/$release_id/assets?access_token=$OAUTH \
                 | jq -r '.[] | "\(.name) \(.id)"' \
@@ -64,6 +68,6 @@ for i in assets/*.tar.gz; do
         fi
         # upload asset
         echo "Uploading $asset_name asset"
-        curl -s -X POST -H "Content-type: application/gzip" -d@- "$upload?name=$asset_name&access_token=$OAUTH" <$i >/dev/null
+        curl -X POST -H "Content-Type: application/tar+gzip" --data-binary @"$i" "$upload?name=$asset_name&access_token=$OAUTH" >/dev/null
     fi
 done
