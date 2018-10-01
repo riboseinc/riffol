@@ -5,7 +5,7 @@ result=0
 for file in $(git diff --name-only --cached); do
     case $file in
 	*.rs)
-	    rustfmt --skip-children --write-mode=diff $file
+	    rustfmt --check $file
 	    if [ $? != 0 ]; then
 		echo ${file} needs formatting before commit
 		result=1

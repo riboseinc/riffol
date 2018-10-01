@@ -10,7 +10,7 @@
 //    documentation and/or other materials provided with the distribution.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NO/T
+// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 // LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
 // A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
 // OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
@@ -21,13 +21,12 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate nereon;
 extern crate syslog;
 
 use application::{self, AppAction, AppState};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
-use serde_json;
+use nereon::{self, FromValue, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::iter::Iterator;
@@ -37,86 +36,63 @@ use std::str::FromStr;
 use std::time::Duration;
 use stream;
 
-#[derive(Deserialize)]
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
+const LICENSE: &str = "BSD-2-Clause";
+const APPNAME: &str = env!("CARGO_PKG_NAME");
+
+#[derive(FromValue)]
 struct Config {
     init: HashMap<String, Init>,
     application_group: HashMap<String, AppGroup>,
     application: HashMap<String, Application>,
-    #[serde(default = "HashMap::new")]
     dependency: HashMap<String, Dependencies>,
-    #[serde(default = "HashMap::new")]
     healthchecks: HashMap<String, HealthChecks>,
-    #[serde(default = "HashMap::new")]
     limits: HashMap<String, Limits>,
 }
 
-#[derive(Deserialize)]
+#[derive(FromValue)]
 struct Init {
     application_groups: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(FromValue)]
 struct AppGroup {
     applications: Vec<String>,
-    #[serde(default = "Vec::new")]
     dependencies: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(FromValue)]
 struct Application {
     exec: String,
     dir: Option<String>,
-    #[serde(default = "HashMap::new")]
     env: HashMap<String, String>,
     env_file: Option<String>,
-    #[serde(default = "default_application_start")]
-    start: String,
-    #[serde(default = "default_application_stop")]
-    stop: String,
-    #[serde(default = "default_application_restart")]
-    restart: String,
-    #[serde(default = "Vec::new")]
+    start: Option<String>,
+    stop: Option<String>,
+    restart: Option<String>,
     healthchecks: Vec<String>,
-    #[serde(default = "default_application_healthcheckfail")]
-    healthcheckfail: AppAction,
-    #[serde(default = "Vec::new")]
+    healthcheckfail: Option<String>,
     limits: Vec<String>,
     stdout: Option<Stream>,
     stderr: Option<Stream>,
 }
 
-#[derive(Deserialize)]
+#[derive(FromValue)]
 struct Dependencies {
     packages: Vec<String>,
 }
 
 type Limits = HashMap<String, u64>;
 
-fn default_application_start() -> String {
-    "start".to_owned()
-}
-
-fn default_application_stop() -> String {
-    "stop".to_owned()
-}
-
-fn default_application_restart() -> String {
-    "restart".to_owned()
-}
-
-fn default_application_healthcheckfail() -> AppAction {
-    AppAction::Restart
-}
-
-#[derive(Deserialize)]
+#[derive(FromValue)]
 struct HealthChecks {
     checks: Vec<String>,
     timeout: u64,
     interval: u64,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(FromValue)]
 enum SyslogSeverity {
     EMERG,
     ALERT,
@@ -128,8 +104,7 @@ enum SyslogSeverity {
     DEBUG,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(FromValue)]
 enum SyslogFacility {
     KERN,
     USER,
@@ -153,12 +128,9 @@ enum SyslogFacility {
     LOCAL7,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
+#[derive(FromValue)]
 enum Stream {
-    File {
-        filename: String,
-    },
+    File(String),
     Syslog {
         socket: Option<String>,
         facility: Option<SyslogFacility>,
@@ -179,26 +151,25 @@ pub struct Riffol {
 }
 
 pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, String> {
-    let options = vec![nereon::Opt::new(
-        "",
-        Some("f"),
-        Some("file"),
-        Some("RIFFOL_CONFIG"),
-        0,
-        None,
-        Some("${file:{}}"),
-        Some("Configuration file"),
-    )];
+    let nos = format!(
+        r#"
+        authors ["{}"]
+        license "{}"
+        name "{}"
+        version {}
+        option config {{
+            flags [takesvalue, required]
+            short f
+            long file
+            default "/etc/riffol.conf"
+            env RIFFOL_CONFIG
+            hint FILE
+            usage "Configuration file"
+        }}"#,
+        AUTHORS, LICENSE, APPNAME, VERSION
+    );
 
-    let config = match nereon::nereon_json(options, args) {
-        Ok(c) => c,
-        Err(s) => return Err(format!("Couldn't get config: {}", s)),
-    };
-
-    let config = match serde_json::from_str::<Config>(&config) {
-        Ok(c) => c,
-        Err(e) => return Err(format!("Invalid config: {}", e)),
-    };
+    let config = nereon::configure::<Config, _, _>(&nos, args)?;
 
     let mut riffol = Riffol {
         applications: vec![],
@@ -225,15 +196,15 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                 };
                                 let mut env = match ap.env_file {
                                     Some(ref file) => match fs::read_to_string(file) {
-                                        Ok(s) => s.lines()
+                                        Ok(s) => s
+                                            .lines()
                                             .map(|v| {
                                                 let kv = v.splitn(2, '=').collect::<Vec<&str>>();
                                                 match kv.len() {
                                                     1 => (kv[0].to_owned(), "".to_owned()),
                                                     _ => (kv[0].to_owned(), kv[1].to_owned()),
                                                 }
-                                            })
-                                            .collect(),
+                                            }).collect(),
                                         Err(e) => {
                                             return Err(format!(
                                                 "Can't read env_file {}: {:?}",
@@ -265,11 +236,30 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     exec: ap.exec.clone(),
                                     dir: ap.dir.clone().unwrap_or("/tmp".to_owned()),
                                     env: env,
-                                    start: ap.start.clone(),
-                                    stop: ap.stop.clone(),
-                                    restart: ap.restart.clone(),
+                                    start: ap
+                                        .start
+                                        .as_ref()
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("start")
+                                        .to_owned(),
+                                    stop: ap
+                                        .stop
+                                        .as_ref()
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("stop")
+                                        .to_owned(),
+                                    restart: ap
+                                        .restart
+                                        .as_ref()
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("restart")
+                                        .to_owned(),
                                     healthchecks: healthchecks,
-                                    healthcheckfail: ap.healthcheckfail.clone(),
+                                    healthcheckfail: ap
+                                        .healthcheckfail
+                                        .as_ref()
+                                        .and_then(|a| a.parse().ok())
+                                        .unwrap_or(AppAction::Restart),
                                     limits: limits,
                                     stdout: stdout,
                                     stderr: stderr,
@@ -284,7 +274,8 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                     }
                     for dep_name in &group.dependencies {
                         match config.dependency.get(dep_name) {
-                            Some(dep) => dep.packages
+                            Some(dep) => dep
+                                .packages
                                 .iter()
                                 .for_each(|d| riffol.dependencies.push(d.clone())),
                             None => return Err(format!("No such dependencies \"{}\"", dep_name)),
@@ -303,27 +294,21 @@ fn get_healthchecks(
     configs: &HashMap<String, HealthChecks>,
     checks: &Vec<String>,
 ) -> Result<Vec<IntervalHealthCheck>, String> {
-    let mut result = vec![];
-
-    for check in checks.iter() {
-        match configs.get(check) {
-            Some(config) => {
-                for p in config.checks.iter() {
-                    match mk_healthcheck(p) {
-                        Ok(x) => result.push(IntervalHealthCheck::new(
-                            Duration::from_secs(config.interval),
-                            Duration::from_secs(config.timeout),
-                            x,
-                        )),
-                        Err(e) => return Err(e),
-                    }
-                }
-            }
-            None => return Err(format!("No such healthcheck \"{}\"", check)),
-        }
-    }
-
-    Ok(result)
+    checks.iter().try_fold(Vec::new(), |result, check| {
+        configs.get(check).map_or_else(
+            || Err(format!("No such healthcheck \"{}\"", check)),
+            |config| {
+                config.checks.iter().try_fold(result, |mut result, check| {
+                    result.push(IntervalHealthCheck::new(
+                        Duration::from_secs(config.interval),
+                        Duration::from_secs(config.timeout),
+                        mk_healthcheck(check)?,
+                    ));
+                    Ok(result)
+                })
+            },
+        )
+    })
 }
 
 fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
@@ -398,8 +383,8 @@ fn get_limits(
 
 fn mk_stream(stream: &Stream) -> Result<stream::Stream, String> {
     match stream {
-        Stream::File { filename: n } => Ok(stream::Stream::File {
-            filename: n.to_owned(),
+        Stream::File(filename) => Ok(stream::Stream::File {
+            filename: filename.to_owned(),
         }),
         Stream::Syslog {
             socket,
@@ -461,8 +446,7 @@ fn config_to_syslog_facility(f: &Option<SyslogFacility>) -> syslog::Facility {
             SyslogFacility::LOCAL5 => syslog::Facility::LOG_LOCAL5,
             SyslogFacility::LOCAL6 => syslog::Facility::LOG_LOCAL6,
             SyslogFacility::LOCAL7 => syslog::Facility::LOG_LOCAL7,
-        })
-        .unwrap_or(syslog::Facility::LOG_DAEMON)
+        }).unwrap_or(syslog::Facility::LOG_DAEMON)
 }
 
 fn config_to_syslog_severity(s: &Option<SyslogSeverity>) -> u32 {
@@ -476,8 +460,7 @@ fn config_to_syslog_severity(s: &Option<SyslogSeverity>) -> u32 {
             SyslogSeverity::NOTICE => syslog::Severity::LOG_NOTICE,
             SyslogSeverity::INFO => syslog::Severity::LOG_INFO,
             SyslogSeverity::DEBUG => syslog::Severity::LOG_DEBUG,
-        })
-        .unwrap_or(syslog::Severity::LOG_DEBUG) as u32
+        }).unwrap_or(syslog::Severity::LOG_DEBUG) as u32
 }
 
 #[cfg(test)]
@@ -488,7 +471,7 @@ mod tests {
 
     #[test]
     fn test() {
-        let args = vec!["-f", "tests/riffol.conf"]
+        let args = vec!["riffol", "-f", "tests/riffol.conf"]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();

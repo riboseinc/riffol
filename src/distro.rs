@@ -10,7 +10,7 @@
 //    documentation and/or other materials provided with the distribution.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NO/T
+// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 // LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
 // A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
 // OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
@@ -34,8 +34,7 @@ fn which(cmd: &str) -> bool {
         .map(|d| match fs::metadata(Path::new(d).join(Path::new(cmd))) {
             Ok(m) => m.is_file() && (m.permissions().mode() & 0o111) != 0,
             Err(_) => false,
-        })
-        .any(|x| x)
+        }).any(|x| x)
 }
 
 fn get_installer() -> Box<Fn(&str) -> bool> {

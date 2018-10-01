@@ -30,15 +30,25 @@ use std::io;
 use std::os::unix::io::IntoRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 use stream;
 
-#[derive(Debug, Deserialize, Clone)]
-#[serde(field_identifier, rename_all = "lowercase")]
+#[derive(Debug, PartialEq)]
 pub enum AppAction {
     Restart,
+}
+
+impl FromStr for AppAction {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.as_ref() {
+            "restart" => Ok(AppAction::Restart),
+            _ => Err(format!("No such AppAction \"{}\"", s)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,8 +90,7 @@ impl Application {
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())
-            })
-            .stdout(stdio(&self.stdout))
+            }).stdout(stdio(&self.stdout))
             .stderr(stdio(&self.stderr))
             .spawn()?;
 
@@ -134,8 +143,7 @@ impl Application {
             .before_exec(move || {
                 limits.iter().for_each(|l| setlimit(l));
                 Ok(())
-            })
-            .stdout(stdio(&self.stdout))
+            }).stdout(stdio(&self.stdout))
             .stderr(stdio(&self.stderr))
             .spawn()
             .and_then(|mut c| c.wait());
@@ -146,7 +154,8 @@ impl Application {
         fail_tx: mpsc::Sender<Option<T>>,
         fail_msg: T,
     ) -> () {
-        self.check_threads = self.healthchecks
+        self.check_threads = self
+            .healthchecks
             .iter()
             .map(|c| {
                 let check = c.clone();
@@ -178,8 +187,7 @@ impl Application {
                     }
                 });
                 (tx, h)
-            })
-            .collect();
+            }).collect();
     }
 
     pub fn stop_check_threads(&mut self) {
@@ -203,5 +211,15 @@ fn stdio(stream: &Option<stream::Stream>) -> Stdio {
             _ => Stdio::piped(),
         },
         None => Stdio::inherit(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_app_action() {
+        use super::AppAction;
+        assert_eq!("restart".parse(), Ok(AppAction::Restart));
+        assert!("restrt".parse::<AppAction>().is_err());
     }
 }

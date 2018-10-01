@@ -10,7 +10,7 @@
 //    documentation and/or other materials provided with the distribution.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NO/T
+// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 // LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
 // A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
 // OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
@@ -70,7 +70,8 @@ impl Init {
 
     pub fn start(&mut self) -> Result<(), String> {
         // start the applications
-        if self.applications
+        if self
+            .applications
             .iter()
             .map(|ap_mutex| {
                 let mut ap = ap_mutex.lock().unwrap();
@@ -81,8 +82,7 @@ impl Init {
                 ap.spawn_check_threads(self.fail_tx.clone(), Arc::clone(&ap_mutex));
                 info!("Successfully spawned application {}", ap.exec);
                 true
-            })
-            .any(|b| !b)
+            }).any(|b| !b)
         {
             self.stop();
             return Err("Some applications failed to start".to_owned());

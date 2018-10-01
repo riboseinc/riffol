@@ -23,10 +23,10 @@
 
 extern crate chan_signal;
 extern crate libc;
-extern crate serde_json;
+extern crate nereon;
 
 #[macro_use]
-extern crate serde_derive;
+extern crate nereon_derive;
 
 #[macro_use]
 extern crate log;
@@ -94,7 +94,8 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
 fn progname() -> String {
     match env::current_exe() {
-        Ok(name) => name.as_path()
+        Ok(name) => name
+            .as_path()
             .file_name()
             .unwrap()
             .to_string_lossy()
