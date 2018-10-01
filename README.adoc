@@ -1,11 +1,11 @@
 = Riffol
 
-Riffol is a supervising process that can run as a traditional daemon on
-Unix-like systems or as an `init` system for containers
-(such as https://github.com/krallin/tini[tini]).
+Riffol is a supervising process that can run as a traditional daemon
+on Unix-like systems or as an `init` system for containers (such as
+https://github.com/krallin/tini[tini]).
 
-Riffol can be configured by creating application groups that consist of
-applications, health checks and dependency checks.
+Riffol can be configured by creating application groups that consist
+of applications, health checks and dependency checks.
 
 [source]
 ----
@@ -30,19 +30,12 @@ applications, health checks and dependency checks.
 
 Riffol uses the unified configuration model from
 https://github.com/riboseinc/event-configuration-models for its
-configuration syntax definition, startup configuration and
-also runtime configuration.
+configuration syntax definition, startup configuration and also
+runtime configuration.
 
 Riffol is implemented in Rust.
 
 == Installation
-
-=== Prerequisites
-
-Riffol depends on https://github.com/vstakhov/libucl[libucl] and `pidof`.
-
-Libucl requires building from source. Make sure `autoconf`, `automake`
-and `libtool` are available and run the following:
 
 [source,shell]
 ----
@@ -80,11 +73,11 @@ directory under `$CARGO_HOME` - usually `~/.cargo/bin/riffol`.
 
  riffol [-f config-file]
 
-Riffol requires a configuration file. The default location of this file is
-`/etc/riffol.conf`.
+Riffol requires a configuration file. The default location of this
+file is `/etc/riffol.conf`.
 
-This location can be specified either via the `RIFFOL_CONFIG` environment
-variable or by using the `-f` command line flag.
+This location can be specified either via the `RIFFOL_CONFIG`
+environment variable or by using the `-f` command line flag.
 
 == Configuration
 
@@ -94,9 +87,9 @@ The main configuration to create application groups:
 
 [source]
 ----
-init "name" {
-  application_groups = [
-    "applicationgroup.name"
+init name {
+  application_groups [
+    applicationgroup.name
   ]
 }
 ----
@@ -105,24 +98,23 @@ E.g.:
 
 [source]
 ----
-init "web" {
-  application_groups = [
-    "applicationgroup.webstack"
-  ]
+init web {
+    application_groups ["applicationgroup.webstack"]
 }
 ----
 
 === Application Group
 
-The entered entries in the `applications[]` list is also the order in which applications should be started.
+The entered entries in the `applications[]` list is also the order in
+which applications should be started.
 
 [source]
 ----
-application_group "name" {
-  applications = [
+application_group name {
+  applications [
     "application.name"
   ]
-  dependencies = [
+  dependencies [
     "dependency.name"
   ]
 }
@@ -132,12 +124,12 @@ E.g.:
 
 [source]
 ----
-application_group "webstack" {
-  applications = [
-    "application.db",
+application_group webstack {
+  applications [
+    "application.db"
     "application.www"
   ]
-  dependencies = [
+  dependencies [
     "dependency.webstackdependencies"
   ]
 }
@@ -148,50 +140,85 @@ application_group "webstack" {
 [source]
 ----
 application "name" {
-  exec = "string"
-  dir = "string"
-  env = {
-    "string" = "string"
-    "string" = "string"
+  exec executable_path
+  dir working_directory
+  env {
+    var1 value
+    var2 value
   }
-  env_file = "string"
-  start = "string"
-  stop = "string"
-  restart = "string"
-  stdout = "string"
-  stderr = "string"
-  uid = int
-  gid = int
-  healthchecks = [
+  env_file env_filename
+  start start_arg
+  stop stop_arg
+  restart restart_arg
+  stdout stream_destination
+  stderr stream_destination
+  uid int
+  gid int
+  healthchecks [
     "healthcheck.name"
   ]
-  healthcheckfail = "string"
+  healthcheckfail fail_action
 }
 ----
 
+`stream_destination` can be one of:
+[source]
+----
+file [
+    filename
+]
+----
+[source]
+----
+syslog {
+    socket unix_sock_address
+    facility syslog_facility
+    severity syslog_severity
+}
+----
+[source]
+----
+rsyslog {
+    address remote_inet_address
+    local local_inet_address
+    facility syslog_facility
+    severity syslog_severity
+}
+----
+
+`syslog_facility` is one of `kern`, `user`, `mail`, `daemon`, `auth`,
+`syslog`, `lpr`, `news`, `uucp`, `cron`, `authpriv`, `ftp`, `local0`,
+`local1`, `local2`, `local3`, `local4`, `local5`, `local6` or
+`local7`.  (default `daemon`)
+
+`syslog_severity` is one of `emerg`, `alert`, `crit`, `err`,
+`warning`, `notice`, `info` or `debug` (default `debug`)
+
+`healthcheckfail` can be one of `start`, `restart` or `stop`.
 E.g.:
 
 [source]
 ----
-application "www" {
-  exec = "/etc/init.d/http"
-  dir = "/var/www"
-  env = {
-    var1key = var1value
-    var2key = var2value
+application www {
+  exec "/etc/init.d/http"
+  dir "/var/www"
+  env {
+    var1key var1value
+    var2key var2value
   }
-  env_file = "/etc/httpd/morevars"
-  start = "start"
-  stop = "stop"
-  restart = "restart"
-  stdout = ""
-  stderr = ""
-  uid = 0
-  gid = 0
-  healthchecks = [
+  env_file "/etc/httpd/morevars"
+  start start
+  stop stop
+  restart restart
+  stdout file "/var/log/riffol_www.log"
+  stderr syslog {
+  }
+  uid 0
+  gid 0
+  healthchecks [
     "healthcheck.www"
   ]
-  healthcheckfail = "restart"
+  healthcheckfail restart
 }
 ----
 
@@ -199,12 +226,12 @@ application "www" {
 
 [source]
 ----
-healthcheck "name" {
-  checks = [
-    "key://value"
+healthcheck name {
+  checks [
+    "class://value"
   ]
-  interval = int
-  timeout = int
+  interval int
+  timeout int
 }
 ----
 
@@ -226,28 +253,29 @@ E.g.:
 
 [source]
 ----
-healthcheck "db" {
-  checks = [
+healthcheck db {
+  checks [
     "df:///var/lib/mysql:512"
     "proc://mysqld",
     "tcp://127.0.0.1:3306"
   ]
-  interval = 60
-  timeout = 10
+  interval 60
+  timeout 10
 }
 ----
 
 === Dependency
 
-A `packages[]` dependency is checked via an operating system specific method.
+A `packages[]` dependency is checked via an operating system specific
+method.
 
 e.g.: on RHEL/CentOS Riffol will execute `rpm -q ${name}`
 
 [source]
 ----
-dependency "name" {
+dependency name {
   packages = [
-    "string"
+    package_name
   ]
 }
 ----
@@ -256,10 +284,10 @@ E.g.:
 
 [source]
 ----
-dependency "webstack" {
-  packages = [
-    "httpd",
-    "mariadb"
+dependency webstack {
+  packages [
+    httpd
+    mariadb
   ]
 }
 ----
@@ -269,9 +297,9 @@ dependency "webstack" {
 
 [source]
 ----
-limits "name" {
-  max_procs = int
-  max_mem = int
+limits name {
+  max_procs int
+  max_mem int
 }
 ----
 
@@ -279,34 +307,9 @@ e.g.:
 
 [source]
 ----
-limits "db" {
-  max_procs = 4
-  max_mem = 1024
-}
-----
-
-
-=== Redirection and stream destination
-
-[source]
-----
-stream_destination "rsyslog" {
-  encoding = "UTF"
-  host = "192.168.1.3"
-  port = 514
-  protocol = "udp"
-}
-
-stream_destination "logfile" {
-  encoding = "UTF"
-  file = "/var/log/mylogs"
-}
-
-application "www" {
-  ...
-  stdout = "${stream_desination.logfile}"
-  stderr = "${stream_desination.rsyslog}"
-  ...
+limits db {
+  max_procs 4
+  max_mem 1024
 }
 ----
 
@@ -314,6 +317,12 @@ application "www" {
 
 https://en.wikipedia.org/wiki/Salmon_run#The_spawning
 
-> The eggs of a female salmon are called her roe. To lay her roe, the female salmon builds a **spawn**ing nest, called a redd, in a riffle with gravel as its streambed. A **riffle** is a relatively shallow length of stream where the water is turbulent and flows faster.
+> The eggs of a female salmon are called her roe. To lay her roe, the
+  female salmon builds a **spawn**ing nest, called a redd, in a riffle
+  with gravel as its streambed. A **riffle** is a relatively shallow
+  length of stream where the water is turbulent and flows faster.
 
-By spelling "riffol" with an O, we are putting the chemical symbol for oxygen in the word: we are https://en.wikipedia.org/wiki/Redox[oxidising] Riffol. Which makes sense, since Riffol is in Rust.
+By spelling "riffol" with an O, we are putting the chemical symbol for
+oxygen in the word: we are
+https://en.wikipedia.org/wiki/Redox[oxidising] Riffol. Which makes
+sense, since Riffol is in Rust.

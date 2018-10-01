@@ -23,10 +23,13 @@
 
 extern crate chan_signal;
 extern crate libc;
-extern crate serde_json;
+extern crate nereon;
 
 #[macro_use]
-extern crate serde_derive;
+extern crate nereon_derive;
+
+#[macro_use]
+extern crate log;
 
 mod application;
 mod config;
@@ -34,6 +37,7 @@ mod distro;
 mod health;
 mod init;
 mod limit;
+mod stream;
 
 use chan_signal::Signal;
 use std::env;
@@ -43,9 +47,9 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
     let config::Riffol {
         applications: apps,
         dependencies: deps,
-    } = config::get_config(args).unwrap_or_else(fail);
+    } = config::get_config(args).unwrap_or_else(|s| fail(&s));
 
-    distro::install_packages(&deps).unwrap_or_else(fail);
+    distro::install_packages(&deps).unwrap_or_else(|s| fail(&s));
 
     let mut signals = vec![];
 
@@ -71,7 +75,7 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
     let mut init = init::Init::new(apps);
 
-    init.start().unwrap_or_else(fail);
+    init.start().unwrap_or_else(|s| fail(&s));
 
     loop {
         let s = signal.recv().unwrap();
@@ -90,7 +94,8 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
 fn progname() -> String {
     match env::current_exe() {
-        Ok(name) => name.as_path()
+        Ok(name) => name
+            .as_path()
             .file_name()
             .unwrap()
             .to_string_lossy()
@@ -99,7 +104,7 @@ fn progname() -> String {
     }
 }
 
-fn fail<T>(e: String) -> T {
+fn fail<T>(e: &str) -> T {
     eprintln!("{}: {}", progname(), e);
     exit(1);
 }

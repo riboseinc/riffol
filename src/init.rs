@@ -10,7 +10,7 @@
 //    documentation and/or other materials provided with the distribution.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NO/T
+// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 // LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
 // A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
 // OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
@@ -24,6 +24,7 @@
 use application::{AppAction, AppState, Application};
 use std::sync::{mpsc, Arc, Mutex};
 use std::{env, thread};
+use stream;
 
 type AppMutex = Arc<Mutex<Application>>;
 
@@ -31,6 +32,7 @@ pub struct Init {
     applications: Vec<AppMutex>,
     fail_tx: mpsc::Sender<Option<AppMutex>>,
     thread: Option<thread::JoinHandle<()>>,
+    stream_handler: stream::Handler,
 }
 
 impl Init {
@@ -45,7 +47,7 @@ impl Init {
                         AppAction::Restart => {
                             ap.stop_check_threads();
                             ap.restart();
-                            ap.spawn_check_threads(tx.clone(), Arc::clone(&ap_mutex));
+                            ap.spawn_check_threads(&tx.clone(), Arc::clone(&ap_mutex));
                         }
                     }
                 } else {
@@ -60,29 +62,33 @@ impl Init {
                 .drain(..)
                 .map(|app| Arc::new(Mutex::new(app)))
                 .collect(),
-            fail_tx: fail_tx,
+            fail_tx,
             thread: Some(thread::spawn(healthcheck_fn)),
+            stream_handler: stream::Handler::new(),
         }
     }
 
     pub fn start(&mut self) -> Result<(), String> {
         // start the applications
-        if self.applications
+        self.applications
             .iter()
-            .map(|ap_mutex| {
-                let mut ap = ap_mutex.lock().unwrap();
-                if !ap.start() {
-                    return false;
-                }
-                ap.spawn_check_threads(self.fail_tx.clone(), Arc::clone(&ap_mutex));
-                true
+            .try_for_each(|ap_mutex| {
+                ap_mutex
+                    .lock()
+                    .map_err(|e| format!("{}", e))
+                    .and_then(|mut ap| {
+                        ap.start(&self.stream_handler).map_err(|e| {
+                            format!("Failed to start application {}: {}", ap.exec, e)
+                        })?;
+                        ap.spawn_check_threads(&self.fail_tx.clone(), Arc::clone(&ap_mutex));
+                        info!("Successfully spawned application {}", ap.exec);
+                        Ok(())
+                    })
+            }).or_else(|e| {
+                error!("{}", e);
+                self.stop();
+                Err("Some applications failed to start".to_owned())
             })
-            .any(|b| !b)
-        {
-            self.stop();
-            return Err("Some applications failed to start".to_owned());
-        }
-        Ok(())
     }
 
     pub fn stop(&mut self) {
@@ -99,14 +105,14 @@ impl Init {
         self.applications.iter().rev().for_each(|ap_mutex| {
             let mut ap = ap_mutex.lock().unwrap();
             if ap.state == AppState::Running {
-                log(format!("Stopping {}", ap.exec));
+                log(&format!("Stopping {}", ap.exec));
                 ap.stop();
             }
         });
     }
 }
 
-fn log(s: String) {
+fn log(s: &str) {
     let arg0 = env::args().next().unwrap();
     eprintln!("{}: {}", arg0, s);
 }

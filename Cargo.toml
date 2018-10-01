@@ -1,13 +1,17 @@
 [package]
 name = "riffol"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["John Hedges <john@drystone.co.uk>"]
-build = "build.rs"
+license = "BSD-2-Clause"
 
 [dependencies]
 chan-signal = "0.3"
 libc = "0.2"
-nereon = "0.1"
-serde = "1.0"
-serde_json = "1.0"
-serde_derive = "1.0"
+log = "0.4"
+mio = "0.6"
+nereon = "0.3"
+nereon_derive = "0.2"
+nix = "0.11"
+slab = "0.4"
+stderrlog = "0.4"
+syslog = "4.0"

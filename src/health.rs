@@ -63,8 +63,8 @@ pub struct IntervalHealthCheck {
 impl IntervalHealthCheck {
     pub fn new(interval: Duration, timeout: Duration, check: HealthCheck) -> IntervalHealthCheck {
         IntervalHealthCheck {
-            interval: interval,
-            timeout: timeout,
+            interval,
+            timeout,
             the_check: check,
         }
     }
@@ -81,7 +81,7 @@ impl IntervalHealthCheck {
         });
         match rx.recv_timeout(self.timeout) {
             Ok(res) => res,
-            Err(_) => Err(format!("Timeout")),
+            Err(_) => Err("Timeout".to_owned()),
         }
     }
 }
@@ -96,7 +96,7 @@ impl DfCheck {
     pub fn new(path: &Path, free: u64) -> DfCheck {
         DfCheck {
             path: PathBuf::from(path),
-            free: free,
+            free,
         }
     }
 
@@ -105,8 +105,8 @@ impl DfCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        fn avail(o: &Vec<u8>) -> Option<u64> {
-            match String::from_utf8_lossy(o).lines().skip(1).next() {
+        fn avail(o: &[u8]) -> Option<u64> {
+            match String::from_utf8_lossy(o).lines().nth(1) {
                 Some(s) => match s.trim_right_matches('M').parse::<u64>() {
                     Ok(n) => Some(n),
                     Err(_) => None,
@@ -169,9 +169,7 @@ pub struct TcpCheck {
 
 impl TcpCheck {
     pub fn new(addr: &SocketAddr) -> TcpCheck {
-        TcpCheck {
-            addr: (*addr).clone(),
-        }
+        TcpCheck { addr: (*addr) }
     }
 
     fn to_string(&self) -> String {
