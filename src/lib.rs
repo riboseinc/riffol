@@ -47,9 +47,9 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
     let config::Riffol {
         applications: apps,
         dependencies: deps,
-    } = config::get_config(args).unwrap_or_else(fail);
+    } = config::get_config(args).unwrap_or_else(|s| fail(&s));
 
-    distro::install_packages(&deps).unwrap_or_else(fail);
+    distro::install_packages(&deps).unwrap_or_else(|s| fail(&s));
 
     let mut signals = vec![];
 
@@ -75,7 +75,7 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
     let mut init = init::Init::new(apps);
 
-    init.start().unwrap_or_else(fail);
+    init.start().unwrap_or_else(|s| fail(&s));
 
     loop {
         let s = signal.recv().unwrap();
@@ -104,7 +104,7 @@ fn progname() -> String {
     }
 }
 
-fn fail<T>(e: String) -> T {
+fn fail<T>(e: &str) -> T {
     eprintln!("{}: {}", progname(), e);
     exit(1);
 }

@@ -44,7 +44,7 @@ pub enum AppAction {
 impl FromStr for AppAction {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, String> {
-        match s.as_ref() {
+        match s {
             "restart" => Ok(AppAction::Restart),
             _ => Err(format!("No such AppAction \"{}\"", s)),
         }
@@ -110,15 +110,14 @@ impl Application {
         }
         let status = child.wait()?;
 
-        match status.success() {
-            true => {
-                self.state = AppState::Running;
-                Ok(())
-            }
-            false => Err(io::Error::new(
+        if status.success() {
+            self.state = AppState::Running;
+            Ok(())
+        } else {
+            Err(io::Error::new(
                 io::ErrorKind::Other,
                 format!("Abnormal exit status ({})", status),
-            )),
+            ))
         }
     }
 
@@ -151,7 +150,7 @@ impl Application {
 
     pub fn spawn_check_threads<T: Send + Sync + Clone + 'static>(
         &mut self,
-        fail_tx: mpsc::Sender<Option<T>>,
+        fail_tx: &mpsc::Sender<Option<T>>,
         fail_msg: T,
     ) -> () {
         self.check_threads = self

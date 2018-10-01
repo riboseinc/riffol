@@ -112,7 +112,7 @@ impl Handler {
         Handler {
             channel: tx,
             thread: Some(thread::spawn(move || {
-                handler(rx);
+                handler(&rx);
             })),
         }
     }
@@ -151,7 +151,7 @@ enum Message {
 ///     poll fds with mio (using a timeout)
 ///     read all readable fds until `WouldBlock`
 ///     deregister any fds that have closed
-fn handler(channel: mpsc::Receiver<Message>) {
+fn handler(channel: &mpsc::Receiver<Message>) {
     let mut connections = Slab::with_capacity(128);
     let poll = Poll::new().unwrap();
     let mut closed = false;
@@ -185,7 +185,7 @@ fn handler(channel: mpsc::Receiver<Message>) {
                 loop {
                     match read_line(&mut connection.source) {
                         Ok(None) => break,                              // WouldBlock
-                        Ok(Some(ref line)) if line.len() == 0 => break, // imminent HUP
+                        Ok(Some(ref line)) if line.is_empty() => break, // imminent HUP
                         Ok(Some(line)) => {
                             match write_line(&connection.sink, &line[..line.len() - 1]) {
                                 Ok(()) => (),
@@ -234,7 +234,7 @@ fn write_line(sink: &Stream, line: &str) -> io::Result<()> {
                 .create_new(true)
                 .append(true)
                 .open(filename)?
-                .write(line.as_ref())?;
+                .write_all(line.as_ref())?;
             Ok(())
         }
         Stream::Syslog {
@@ -243,7 +243,7 @@ fn write_line(sink: &Stream, line: &str) -> io::Result<()> {
             severity,
         } => {
             let formatter = Formatter3164 {
-                facility: facility.clone(),
+                facility: *facility,
                 hostname: None,
                 process: String::from("riffol"),
                 pid: 0,
@@ -261,18 +261,16 @@ fn write_line(sink: &Stream, line: &str) -> io::Result<()> {
             let line = line.to_owned();
 
             match logger {
-                Ok(mut logger) => {
-                    match severity {
-                        x if *x == LOG_EMERG as u32 => logger.emerg(line),
-                        x if *x == LOG_ALERT as u32 => logger.alert(line),
-                        x if *x == LOG_CRIT as u32 => logger.crit(line),
-                        x if *x == LOG_ERR as u32 => logger.err(line),
-                        x if *x == LOG_WARNING as u32 => logger.warning(line),
-                        x if *x == LOG_NOTICE as u32 => logger.notice(line),
-                        x if *x == LOG_INFO as u32 => logger.info(line),
-                        _ => logger.debug(line),
-                    }.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))
-                }
+                Ok(mut logger) => match severity {
+                    x if *x == LOG_EMERG as u32 => logger.emerg(line),
+                    x if *x == LOG_ALERT as u32 => logger.alert(line),
+                    x if *x == LOG_CRIT as u32 => logger.crit(line),
+                    x if *x == LOG_ERR as u32 => logger.err(line),
+                    x if *x == LOG_WARNING as u32 => logger.warning(line),
+                    x if *x == LOG_NOTICE as u32 => logger.notice(line),
+                    x if *x == LOG_INFO as u32 => logger.info(line),
+                    _ => logger.debug(line),
+                }.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e))),
                 _ => Err(io::Error::new(
                     io::ErrorKind::Other,
                     "Couldn't create logging instance",

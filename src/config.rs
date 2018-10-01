@@ -234,8 +234,8 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
 
                                 riffol.applications.push(application::Application {
                                     exec: ap.exec.clone(),
-                                    dir: ap.dir.clone().unwrap_or("/tmp".to_owned()),
-                                    env: env,
+                                    dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
+                                    env,
                                     start: ap
                                         .start
                                         .as_ref()
@@ -254,15 +254,15 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                         .map(|s| s.as_str())
                                         .unwrap_or("restart")
                                         .to_owned(),
-                                    healthchecks: healthchecks,
+                                    healthchecks,
                                     healthcheckfail: ap
                                         .healthcheckfail
                                         .as_ref()
                                         .and_then(|a| a.parse().ok())
                                         .unwrap_or(AppAction::Restart),
-                                    limits: limits,
-                                    stdout: stdout,
-                                    stderr: stderr,
+                                    limits,
+                                    stdout,
+                                    stderr,
                                     state: AppState::Stopped,
                                     check_threads: vec![],
                                     stdout_thread: None,
@@ -292,7 +292,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
 
 fn get_healthchecks(
     configs: &HashMap<String, HealthChecks>,
-    checks: &Vec<String>,
+    checks: &[String],
 ) -> Result<Vec<IntervalHealthCheck>, String> {
     checks.iter().try_fold(Vec::new(), |result, check| {
         configs.get(check).map_or_else(
@@ -324,13 +324,13 @@ fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
     let bad = |u| Err(format!("Bad {0} healthcheck. Use \"{0}//{1}\"", check, u));
     match check.as_ref() {
         "proc" => match args {
-            ref s if s.len() > 0 => Ok(HealthCheck::ProcCheck(ProcCheck::new(&args))),
+            ref s if !s.is_empty() => Ok(HealthCheck::ProcCheck(ProcCheck::new(&args))),
             _ => bad("<process>"),
         },
         "df" => {
             let bad_df = || bad("<file>:<free>");
             match split2(":", &args) {
-                (ref file, ref free) if file.len() > 0 => match free.parse() {
+                (ref file, ref free) if !file.is_empty() => match free.parse() {
                     Ok(n) => Ok(HealthCheck::DfCheck(DfCheck::new(Path::new(&file), n))),
                     _ => bad_df(),
                 },
@@ -345,10 +345,7 @@ fn mk_healthcheck(params: &str) -> Result<HealthCheck, String> {
     }
 }
 
-fn get_limits(
-    configs: &HashMap<String, Limits>,
-    limits: &Vec<String>,
-) -> Result<Vec<RLimit>, String> {
+fn get_limits(configs: &HashMap<String, Limits>, limits: &[String]) -> Result<Vec<RLimit>, String> {
     let min = |a, b| match (a, b) {
         (x, Limit::Infinity) => x,
         (Limit::Num(x), Limit::Num(y)) if x < y => Limit::Num(x),
@@ -405,10 +402,7 @@ fn mk_stream(stream: &Stream) -> Result<stream::Stream, String> {
                 if let Ok(server) = SocketAddr::from_str(server) {
                     match local {
                         Some(local) => match SocketAddr::from_str(local) {
-                            Ok(local) => stream::Address::Udp {
-                                server: server,
-                                local: local,
-                            },
+                            Ok(local) => stream::Address::Udp { server, local },
                             Err(_) => return Err(format!("Not a valid inet address: {}", local)),
                         },
                         None => stream::Address::Tcp(server),

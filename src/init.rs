@@ -47,7 +47,7 @@ impl Init {
                         AppAction::Restart => {
                             ap.stop_check_threads();
                             ap.restart();
-                            ap.spawn_check_threads(tx.clone(), Arc::clone(&ap_mutex));
+                            ap.spawn_check_threads(&tx.clone(), Arc::clone(&ap_mutex));
                         }
                     }
                 } else {
@@ -62,7 +62,7 @@ impl Init {
                 .drain(..)
                 .map(|app| Arc::new(Mutex::new(app)))
                 .collect(),
-            fail_tx: fail_tx,
+            fail_tx,
             thread: Some(thread::spawn(healthcheck_fn)),
             stream_handler: stream::Handler::new(),
         }
@@ -70,24 +70,25 @@ impl Init {
 
     pub fn start(&mut self) -> Result<(), String> {
         // start the applications
-        if self
-            .applications
+        self.applications
             .iter()
-            .map(|ap_mutex| {
-                let mut ap = ap_mutex.lock().unwrap();
-                if let Err(e) = ap.start(&self.stream_handler) {
-                    error!("Failed to spawn application {} ({})", ap.exec, e);
-                    return false;
-                }
-                ap.spawn_check_threads(self.fail_tx.clone(), Arc::clone(&ap_mutex));
-                info!("Successfully spawned application {}", ap.exec);
-                true
-            }).any(|b| !b)
-        {
-            self.stop();
-            return Err("Some applications failed to start".to_owned());
-        }
-        Ok(())
+            .try_for_each(|ap_mutex| {
+                ap_mutex
+                    .lock()
+                    .map_err(|e| format!("{}", e))
+                    .and_then(|mut ap| {
+                        ap.start(&self.stream_handler).map_err(|e| {
+                            format!("Failed to start application {}: {}", ap.exec, e)
+                        })?;
+                        ap.spawn_check_threads(&self.fail_tx.clone(), Arc::clone(&ap_mutex));
+                        info!("Successfully spawned application {}", ap.exec);
+                        Ok(())
+                    })
+            }).or_else(|e| {
+                error!("{}", e);
+                self.stop();
+                Err("Some applications failed to start".to_owned())
+            })
     }
 
     pub fn stop(&mut self) {
@@ -104,14 +105,14 @@ impl Init {
         self.applications.iter().rev().for_each(|ap_mutex| {
             let mut ap = ap_mutex.lock().unwrap();
             if ap.state == AppState::Running {
-                log(format!("Stopping {}", ap.exec));
+                log(&format!("Stopping {}", ap.exec));
                 ap.stop();
             }
         });
     }
 }
 
-fn log(s: String) {
+fn log(s: &str) {
     let arg0 = env::args().next().unwrap();
     eprintln!("{}: {}", arg0, s);
 }

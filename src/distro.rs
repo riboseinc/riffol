@@ -29,8 +29,8 @@ use std::process::Command;
 
 fn which(cmd: &str) -> bool {
     env::var("PATH")
-        .unwrap_or("".to_owned())
-        .split(":")
+        .unwrap_or_else(|_| "".to_owned())
+        .split(':')
         .map(|d| match fs::metadata(Path::new(d).join(Path::new(cmd))) {
             Ok(m) => m.is_file() && (m.permissions().mode() & 0o111) != 0,
             Err(_) => false,
@@ -38,13 +38,8 @@ fn which(cmd: &str) -> bool {
 }
 
 fn get_installer() -> Box<Fn(&str) -> bool> {
-    match ["apt", "yum"]
-        .iter()
-        .find(|pm| which(pm))
-        .unwrap_or(&"")
-        .as_ref()
-    {
-        "apt" => Box::new(|pkg| {
+    if which("apt") {
+        Box::new(|pkg| {
             Command::new("apt-get")
                 .arg("-y")
                 .arg("--no-install-recommends")
@@ -53,8 +48,9 @@ fn get_installer() -> Box<Fn(&str) -> bool> {
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false)
-        }),
-        "yum" => Box::new(|pkg| {
+        })
+    } else if which("yum") {
+        Box::new(|pkg| {
             Command::new("yum")
                 .arg("-y")
                 .arg("install")
@@ -62,12 +58,13 @@ fn get_installer() -> Box<Fn(&str) -> bool> {
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false)
-        }),
-        _ => Box::new(|_| false),
+        })
+    } else {
+        Box::new(|_| false)
     }
 }
 
-pub fn install_packages(depends: &Vec<String>) -> Result<(), String> {
+pub fn install_packages(depends: &[String]) -> Result<(), String> {
     let install = get_installer();
     for d in depends {
         if !install(d) {
