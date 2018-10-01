@@ -9,8 +9,8 @@ chan-signal = "0.3"
 libc = "0.2"
 log = "0.4"
 mio = "0.6"
-nereon = {version = "0.3", path = "../rust-nereon"}
-nereon_derive = {version = "0.2", path = "../rust-nereon/derive"}
+nereon = "0.3"
+nereon_derive = "0.2"
 nix = "0.11"
 slab = "0.4"
 stderrlog = "0.4"
