@@ -167,10 +167,9 @@ impl ProcCheck {
                                 .filter(|_| contents == self.process)
                                 .and_then(|_| {
                                     File::open(format!("{}/cmdline", path))
-                                        .and_then(|mut f| f.read_to_string(&mut contents))
                                         .ok()
-                                }).filter(|_| !contents.is_empty())
-                                .is_some()
+                                        .and_then(|f| f.bytes().next())
+                                }).is_some()
                         }).is_some()
                 }).ok_or_else(|| "No such process".to_owned())
                 .map(|_| ())
