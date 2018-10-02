@@ -1,7 +1,6 @@
 #!/bin/sh
 
 NAME=riffol-wordpress
-UCLDIR=/usr/local/lib
 
 cd $(dirname $0)/..
 docker build -t $NAME examples/wordpress
