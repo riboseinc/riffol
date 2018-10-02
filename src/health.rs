@@ -157,8 +157,10 @@ impl ProcCheck {
                     result
                         .as_ref()
                         .ok()
-                        .filter(|entry| entry.file_name().to_string_lossy().parse::<u32>().is_ok())
                         .filter(|entry| {
+                            eprintln!("{}", entry.file_name().to_string_lossy());
+                            entry.file_name().to_string_lossy().parse::<u32>().is_ok()
+                        }).filter(|entry| {
                             let mut comm = String::new();
                             let path = entry.path().to_string_lossy().into_owned();
                             File::open(format!("{}/comm", path))
