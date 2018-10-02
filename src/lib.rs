@@ -82,7 +82,7 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
         match s {
             Signal::CHLD => unsafe {
-                libc::wait(std::ptr::null_mut());
+                libc::waitpid(0, std::ptr::null_mut(), libc::WNOHANG);
             },
             _ => break,
         }
