@@ -58,17 +58,23 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
     {
         static PR_SET_CHILD_SUBREAPER: libc::c_int = 36;
 
-        if unsafe { libc::getpid() } != 1 {
-            if unsafe { libc::prctl(PR_SET_CHILD_SUBREAPER, 1) } != 0 {
-                eprintln!(
-                    "{}: Not PID 1 and couldn't set PR_CHILD_SUBREAPER",
-                    progname(),
-                );
-            }
+        if unsafe { libc::getpid() != 1 && libc::prctl(PR_SET_CHILD_SUBREAPER, 1) != 0 } {
+            warn!(
+                "{}: Not PID 1 and couldn't set PR_CHILD_SUBREAPER",
+                progname(),
+            );
         }
     }
 
-    signals.push(signal_hook::SIGCHLD);
+    //start a process reaping thread
+    thread::spawn(|| loop {
+        let n = unsafe { libc::wait(std::ptr::null_mut()) };
+        if n > 0 {
+            debug!("Reaped child {}", n);
+        }
+    });
+
+    // set up a signal handler
     signals.push(signal_hook::SIGINT);
     signals.push(signal_hook::SIGTERM);
 
@@ -84,23 +90,9 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
     init.start().unwrap_or_else(|s| fail(&s));
 
-    loop {
-        let s = r.recv().unwrap();
-        debug!("Received signal {:?}", s);
-
-        match s {
-            signal_hook::SIGCHLD => unsafe {
-                loop {
-                    let n = libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG);
-                    if n <= 0 {
-                        break;
-                    }
-                    debug!("Reaped child {}", n);
-                }
-            },
-            _ => break,
-        }
-    }
+    // wait for INT or TERM
+    let s = r.recv().unwrap();
+    debug!("Received signal {:?}", s);
 
     init.stop();
 }

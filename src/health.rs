@@ -162,16 +162,15 @@ impl ProcCheck {
                             let mut contents = String::new();
                             File::open(format!("/proc/{}/comm", pid))
                                 .and_then(|mut f| f.read_to_string(&mut contents))
-                                .ok()
-                                .filter(|_| {
+                                .map(|_| {
                                     contents.pop();
                                     contents == self.process
-                                }).is_some()
+                                }).unwrap_or(false)
                         }).map(|pid| {
                             File::open(format!("/proc/{}/cmdline", pid))
                                 .ok()
-                                .and_then(|f| f.bytes().next())
-                        }).is_some()
+                                .map_or_else(|| false, |f| f.bytes().next().is_some())
+                        }).unwrap_or(false)
                 }).ok_or_else(|| "No such process".to_owned())
                 .map(|_| ())
             })
