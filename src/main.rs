@@ -25,7 +25,11 @@ extern crate riffol;
 extern crate stderrlog;
 
 fn main() {
-    stderrlog::new().module(module_path!()).init().unwrap();
+    stderrlog::new()
+        .module(module_path!())
+        .verbosity(12)
+        .init()
+        .unwrap();
 
     riffol::riffol(std::env::args());
 }

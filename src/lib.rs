@@ -86,14 +86,16 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
 
     loop {
         let s = r.recv().unwrap();
-        eprintln!("{}: Received signal {:?}", progname(), s);
+        debug!("Received signal {:?}", s);
 
         match s {
             signal_hook::SIGCHLD => unsafe {
                 loop {
-                    if libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) <= 0 {
+                    let n = libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG);
+                    if n <= 0 {
                         break;
                     }
+                    debug!("Reaped child {}", n);
                 }
             },
             _ => break,
