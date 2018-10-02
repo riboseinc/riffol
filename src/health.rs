@@ -157,16 +157,16 @@ impl ProcCheck {
                     result
                         .as_ref()
                         .ok()
-                        .filter(|entry| entry.file_name().to_string_lossy().parse::<u32>().is_ok())
-                        .filter(|entry| {
+                        .and_then(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+                        .filter(|pid| {
                             let mut contents = String::new();
-                            let path = entry.path().to_string_lossy().into_owned();
-                            File::open(format!("{}/comm", path))
+                            File::open(format!("/proc/{}/comm", pid))
                                 .and_then(|mut f| f.read_to_string(&mut contents))
                                 .ok()
+                                .map(|_| println!("[{}][{}]", contents, self.process))
                                 .filter(|_| contents == self.process)
                                 .and_then(|_| {
-                                    File::open(format!("{}/cmdline", path))
+                                    File::open(format!("/proc/{}/cmdline", pid))
                                         .ok()
                                         .and_then(|f| f.bytes().next())
                                 }).is_some()
