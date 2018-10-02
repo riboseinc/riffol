@@ -117,6 +117,7 @@ impl DfCheck {
             .arg(&self.path)
             .stderr(Stdio::null())
             .output()
+            .map_err(|e| debug!("df said {}", e))
             .ok()
             .filter(|o| o.status.success())
             .and_then(|o| avail(&o.stdout))
