@@ -163,13 +163,14 @@ impl ProcCheck {
                             File::open(format!("/proc/{}/comm", pid))
                                 .and_then(|mut f| f.read_to_string(&mut contents))
                                 .ok()
-                                .map(|_| println!("[{}][{}]", contents, self.process))
-                                .filter(|_| contents == self.process)
-                                .and_then(|_| {
-                                    File::open(format!("/proc/{}/cmdline", pid))
-                                        .ok()
-                                        .and_then(|f| f.bytes().next())
+                                .filter(|_| {
+                                    contents.pop();
+                                    contents == self.process
                                 }).is_some()
+                        }).map(|pid| {
+                            File::open(format!("/proc/{}/cmdline", pid))
+                                .ok()
+                                .and_then(|f| f.bytes().next())
                         }).is_some()
                 }).ok_or_else(|| "No such process".to_owned())
                 .map(|_| ())
