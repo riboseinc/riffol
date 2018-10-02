@@ -21,9 +21,12 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use libc::statvfs64;
+use std::ffi::CString;
+use std::fs::{metadata, read_dir, File};
+use std::io::Read;
 use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -88,13 +91,13 @@ impl IntervalHealthCheck {
 #[derive(Debug, Clone)]
 pub struct DfCheck {
     free: u64,
-    path: PathBuf,
+    path: CString,
 }
 
 impl DfCheck {
     pub fn new(path: &Path, free: u64) -> DfCheck {
         DfCheck {
-            path: PathBuf::from(path),
+            path: CString::new(path.to_string_lossy().into_owned()).unwrap(),
             free,
         }
     }
@@ -104,31 +107,27 @@ impl DfCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        fn avail(o: &[u8]) -> Option<u64> {
-            String::from_utf8_lossy(o)
-                .lines()
-                .nth(1)
-                .and_then(|s| s.trim_right_matches('M').parse::<u64>().ok())
+        // use statvfs to get blocks available to unpriviliged users
+        let free = unsafe {
+            let mut stats: statvfs64 = ::std::mem::uninitialized();
+            if statvfs64(self.path.as_ptr(), &mut stats) == 0 {
+                Ok(stats.f_bsize as u64 * stats.f_bavail / 1024 / 1024)
+            } else {
+                Err("Couldn't read".to_owned())
+                //Err(libc::strerror(*__errno_location()))
+            }
         };
 
-        Command::new("/bin/df")
-            .arg("-BM")
-            .arg("--output=avail")
-            .arg(&self.path)
-            .stderr(Stdio::null())
-            .output()
-            .map_err(|e| debug!("df said {}", e))
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| avail(&o.stdout))
-            .ok_or_else(|| "Failed to get free space".to_owned())
-            .and_then(|free| {
-                if free >= self.free {
-                    Ok(())
-                } else {
-                    Err(format!("{}MB free", free))
-                }
-            })
+        free.and_then(|f| {
+            if f > self.free {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Insufficient disk space. {}MB available, {}MB required",
+                    f, self.free
+                ))
+            }
+        })
     }
 }
 
@@ -148,15 +147,31 @@ impl ProcCheck {
         format!("Proc healthcheck, checking for {}", self.process)
     }
 
+    // match against /proc/pid/comm
+    // zombie if /proc/pid/cmdline is empty
     fn do_check(&self) -> Result<(), String> {
-        Command::new("pidof")
-            .arg(&self.process)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .ok()
-            .filter(|s| s.success())
-            .map_or_else(|| Err("No such process".to_owned()), |_| Ok(()))
+        read_dir("/proc")
+            .map_err(|_| "Couldn't read procfs".to_owned())
+            .and_then(|mut it| {
+                it.find(|ref result| {
+                    result
+                        .as_ref()
+                        .ok()
+                        .filter(|entry| entry.file_name().to_string_lossy().parse::<u32>().is_ok())
+                        .filter(|entry| {
+                            let mut comm = String::new();
+                            let path = entry.path().to_string_lossy().into_owned();
+                            File::open(format!("{}/comm", path))
+                                .and_then(|mut f| f.read_to_string(&mut comm))
+                                .ok()
+                                .filter(|_| comm == self.process)
+                                .and_then(|_| metadata(format!("{}/cmdline", path)).ok())
+                                .filter(|m| m.len() > 0)
+                                .is_some()
+                        }).is_some()
+                }).ok_or_else(|| "No such process".to_owned())
+                .map(|_| ())
+            })
     }
 }
 
