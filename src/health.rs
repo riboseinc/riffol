@@ -79,10 +79,9 @@ impl IntervalHealthCheck {
         thread::spawn(move || {
             let _t = tx.send(check.do_check());
         });
-        match rx.recv_timeout(self.timeout) {
-            Ok(res) => res,
-            Err(_) => Err("Timeout".to_owned()),
-        }
+        rx.recv_timeout(self.timeout)
+            .map_err(|_| "Timeout".to_owned())
+            .and_then(|res| res)
     }
 }
 
@@ -106,30 +105,29 @@ impl DfCheck {
 
     fn do_check(&self) -> Result<(), String> {
         fn avail(o: &[u8]) -> Option<u64> {
-            match String::from_utf8_lossy(o).lines().nth(1) {
-                Some(s) => match s.trim_right_matches('M').parse::<u64>() {
-                    Ok(n) => Some(n),
-                    Err(_) => None,
-                },
-                None => None,
-            }
+            String::from_utf8_lossy(o)
+                .lines()
+                .nth(1)
+                .and_then(|s| s.trim_right_matches('M').parse::<u64>().ok())
         };
 
-        let fail = "Failed to get free space";
-        match Command::new("/bin/df")
+        Command::new("/bin/df")
             .arg("-BM")
             .arg("--output=avail")
             .arg(&self.path)
             .stderr(Stdio::null())
             .output()
-        {
-            Ok(o) => match (o.status.success(), avail(&o.stdout)) {
-                (true, Some(n)) if n >= self.free => Ok(()),
-                (true, Some(n)) => Err(format!("{}MB free", n,)),
-                _ => Err(fail.to_owned()),
-            },
-            _ => Err(fail.to_owned()),
-        }
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| avail(&o.stdout))
+            .ok_or_else(|| "Failed to get free space".to_owned())
+            .and_then(|free| {
+                if free >= self.free {
+                    Ok(())
+                } else {
+                    Err(format!("{}MB free", free))
+                }
+            })
     }
 }
 
@@ -150,15 +148,14 @@ impl ProcCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        match Command::new("pidof")
+        Command::new("pidof")
             .arg(&self.process)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-        {
-            Ok(s) if s.success() => Ok(()),
-            _ => Err("No such process".to_owned()),
-        }
+            .ok()
+            .filter(|s| s.success())
+            .map_or_else(|| Err("No such process".to_owned()), |_| Ok(()))
     }
 }
 
@@ -177,9 +174,8 @@ impl TcpCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        match TcpStream::connect(&self.addr) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed ({})", e)),
-        }
+        TcpStream::connect(&self.addr)
+            .map(|_| ())
+            .map_err(|e| format!("Failed ({})", e))
     }
 }
