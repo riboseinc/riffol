@@ -4,12 +4,12 @@ RUN apt-get update \
     && apt-get -y upgrade \
     && apt-get -y install --no-install-recommends \
         curl \
+        gcc \
+        libc6-dev \
         mysql-server \
         wordpress \
         wordpress-theme-twentyseventeen \
     && curl https://sh.rustup.rs -sSf | sh -s -- -y
-
-RUN /root/.cargo/bin/cargo install riffol
 
 COPY apache.conf /etc/apache2/sites-available/wordpress.conf
 RUN a2enmod rewrite && a2enmod vhost_alias && a2dissite 000-default && a2ensite wordpress
@@ -19,4 +19,6 @@ COPY wordpress.sql /tmp
 COPY initialise-mysql.sh /tmp
 COPY riffol.conf /etc
 
-CMD /root/.cargo/bin/riffol -f /etc/riffol.conf
+RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol --branch dev
+
+ENTRYPOINT ["/root/.cargo/bin/riffol",  "-f",  "/etc/riffol.conf"]
