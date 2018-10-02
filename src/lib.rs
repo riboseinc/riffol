@@ -91,7 +91,7 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
         match s {
             signal_hook::SIGCHLD => unsafe {
                 loop {
-                    if libc::waitpid(1, std::ptr::null_mut(), libc::WNOHANG) <= 0 {
+                    if libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) <= 0 {
                         break;
                     }
                 }
