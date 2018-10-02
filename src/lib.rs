@@ -21,9 +21,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate chan_signal;
 extern crate libc;
 extern crate nereon;
+extern crate signal_hook;
 
 #[macro_use]
 extern crate nereon_derive;
@@ -39,9 +39,10 @@ mod init;
 mod limit;
 mod stream;
 
-use chan_signal::Signal;
 use std::env;
 use std::process::exit;
+use std::sync::mpsc;
+use std::thread;
 
 pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
     let config::Riffol {
@@ -67,21 +68,28 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) {
         }
     }
 
-    signals.push(Signal::CHLD);
-    signals.push(Signal::INT);
-    signals.push(Signal::TERM);
-    let signal = chan_signal::notify(signals.as_ref());
+    signals.push(signal_hook::SIGCHLD);
+    signals.push(signal_hook::SIGINT);
+    signals.push(signal_hook::SIGTERM);
+
+    let (s, r) = mpsc::channel();
+    let signals = signal_hook::iterator::Signals::new(signals).unwrap();
+    thread::spawn(move || {
+        for signal in signals.forever() {
+            s.send(signal).unwrap();
+        }
+    });
 
     let mut init = init::Init::new(apps);
 
     init.start().unwrap_or_else(|s| fail(&s));
 
     loop {
-        let s = signal.recv().unwrap();
+        let s = r.recv().unwrap();
         eprintln!("{}: Received signal {:?}", progname(), s);
 
         match s {
-            Signal::CHLD => unsafe {
+            signal_hook::SIGCHLD => unsafe {
                 libc::waitpid(0, std::ptr::null_mut(), libc::WNOHANG);
             },
             _ => break,
