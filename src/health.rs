@@ -164,6 +164,7 @@ impl ProcCheck {
                             File::open(format!("{}/comm", path))
                                 .and_then(|mut f| f.read_to_string(&mut comm))
                                 .ok()
+                                .map(|_| eprintln!("{}", comm))
                                 .filter(|_| comm == self.process)
                                 .and_then(|_| metadata(format!("{}/cmdline", path)).ok())
                                 .filter(|m| m.len() > 0)
