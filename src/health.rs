@@ -23,7 +23,7 @@
 
 use libc::statvfs64;
 use std::ffi::CString;
-use std::fs::{metadata, read_dir, File};
+use std::fs::{read_dir, File};
 use std::io::Read;
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
@@ -157,19 +157,19 @@ impl ProcCheck {
                     result
                         .as_ref()
                         .ok()
+                        .filter(|entry| entry.file_name().to_string_lossy().parse::<u32>().is_ok())
                         .filter(|entry| {
-                            eprintln!("{}", entry.file_name().to_string_lossy());
-                            entry.file_name().to_string_lossy().parse::<u32>().is_ok()
-                        }).filter(|entry| {
-                            let mut comm = String::new();
+                            let mut contents = String::new();
                             let path = entry.path().to_string_lossy().into_owned();
                             File::open(format!("{}/comm", path))
-                                .and_then(|mut f| f.read_to_string(&mut comm))
+                                .and_then(|mut f| f.read_to_string(&mut contents))
                                 .ok()
-                                .map(|_| eprintln!("{}", comm))
-                                .filter(|_| comm == self.process)
-                                .and_then(|_| metadata(format!("{}/cmdline", path)).ok())
-                                .filter(|m| m.len() > 0)
+                                .filter(|_| contents == self.process)
+                                .and_then(|_| {
+                                    File::open(format!("{}/cmdline", path))
+                                        .and_then(|mut f| f.read_to_string(&mut contents))
+                                        .ok()
+                                }).filter(|_| !contents.is_empty())
                                 .is_some()
                         }).is_some()
                 }).ok_or_else(|| "No such process".to_owned())
