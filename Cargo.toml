@@ -16,12 +16,14 @@ exclude = [
     ]
 
 [dependencies]
+crossbeam-channel = "0.2"
 libc = "0.2"
 log = "0.4"
 mio = "0.6"
 nereon = "0.3"
 nereon_derive = "0.2"
 nix = "0.11"
+rand = "0.5"
 signal-hook = "0.1"
 slab = "0.4"
 stderrlog = "0.4"

@@ -23,17 +23,13 @@
 
 extern crate libc;
 
-use health::IntervalHealthCheck;
 use limit::{setlimit, RLimit};
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::IntoRawFd;
 use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
-use std::sync::mpsc;
-use std::thread;
-use std::time::Instant;
 use stream;
 
 #[derive(Debug, PartialEq)]
@@ -59,31 +55,63 @@ pub struct Application {
     pub start: String,
     pub stop: String,
     pub restart: String,
-    pub healthchecks: Vec<IntervalHealthCheck>,
+    pub healthchecks: Vec<String>,
     pub healthcheckfail: AppAction,
     pub limits: Vec<RLimit>,
     pub stdout: Option<stream::Stream>,
     pub stderr: Option<stream::Stream>,
     pub state: AppState,
-    pub check_threads: Vec<(mpsc::Sender<()>, thread::JoinHandle<()>)>,
-    pub stdout_thread: Option<thread::JoinHandle<()>>,
-    pub stderr_thread: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum AppState {
+    Idle,
+    Starting {
+        pid: u32,
+        fds: (Option<i32>, Option<i32>, Option<i32>),
+    },
     Running,
-    Failed,
+    Stopping {
+        pid: u32,
+        restart: bool,
+    },
     Stopped,
 }
 
 impl Application {
-    pub fn start(&mut self, stream_handler: &stream::Handler) -> io::Result<()> {
+    pub fn start(&self) -> io::Result<AppState> {
+        self.start_process(&self.start)
+            .map(|mut child| AppState::Starting {
+                pid: child.id(),
+                fds: (
+                    child.stdin.take().map(|s| s.into_raw_fd()),
+                    child.stdout.take().map(|s| s.into_raw_fd()),
+                    child.stderr.take().map(|s| s.into_raw_fd()),
+                ),
+            })
+    }
+
+    pub fn stop(&self, restart: bool) -> io::Result<AppState> {
+        self.start_process(&self.stop)
+            .map(|child| AppState::Stopping {
+                pid: child.id(),
+                restart,
+            })
+    }
+
+    fn start_process(&self, arg: &str) -> io::Result<Child> {
+        fn stdio(stream: &Option<stream::Stream>) -> Stdio {
+            stream
+                .as_ref()
+                .map(|stream| match stream {
+                    stream::Stream::File { filename: f } if f == "/dev/null" => Stdio::null(),
+                    _ => Stdio::piped(),
+                }).unwrap_or_else(|| Stdio::inherit())
+        }
+
         let limits = self.limits.clone();
-        self.state = AppState::Failed;
 
-        let mut child = Command::new(&self.exec)
-            .arg(&self.start)
+        Command::new(&self.exec)
             .current_dir(&self.dir)
             .env_clear()
             .envs(self.env.iter())
@@ -92,124 +120,8 @@ impl Application {
                 Ok(())
             }).stdout(stdio(&self.stdout))
             .stderr(stdio(&self.stderr))
-            .spawn()?;
-
-        if let Some(stdout) = child.stdout.take() {
-            if let Err(e) =
-                stream_handler.add_stream(stdout.into_raw_fd(), self.stdout.as_ref().unwrap())
-            {
-                warn!("Failed to capture stdout for {} ({})", self.exec, e);
-            }
-        }
-        if let Some(stderr) = child.stderr.take() {
-            if let Err(e) =
-                stream_handler.add_stream(stderr.into_raw_fd(), self.stderr.as_ref().unwrap())
-            {
-                warn!("Failed to capture stderr for {} ({})", self.exec, e);
-            }
-        }
-        let status = child.wait()?;
-
-        if status.success() {
-            self.state = AppState::Running;
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Abnormal exit status ({})", status),
-            ))
-        }
-    }
-
-    pub fn stop(&mut self) {
-        let _result = Command::new(&self.exec)
-            .arg(&self.stop)
-            .current_dir(&self.dir)
-            .env_clear()
-            .envs(self.env.iter())
+            .arg(arg)
             .spawn()
-            .and_then(|mut c| c.wait());
-        self.state = AppState::Stopped;
-    }
-
-    pub fn restart(&self) {
-        let limits = self.limits.to_owned();
-        let _result = Command::new(&self.exec)
-            .arg(&self.restart)
-            .current_dir(&self.dir)
-            .env_clear()
-            .envs(self.env.iter())
-            .before_exec(move || {
-                limits.iter().for_each(|l| setlimit(l));
-                Ok(())
-            }).stdout(stdio(&self.stdout))
-            .stderr(stdio(&self.stderr))
-            .spawn()
-            .and_then(|mut c| c.wait());
-    }
-
-    pub fn spawn_check_threads<T: Send + Sync + Clone + 'static>(
-        &mut self,
-        fail_tx: &mpsc::Sender<Option<T>>,
-        fail_msg: T,
-    ) -> () {
-        self.check_threads = self
-            .healthchecks
-            .iter()
-            .map(|c| {
-                let check = c.clone();
-                let fail_tx = fail_tx.clone();
-                let fail_msg = fail_msg.clone();
-                let (tx, rx) = mpsc::channel();
-                let h = thread::spawn(move || {
-                    let mut next = Instant::now() + check.interval;
-                    loop {
-                        match rx.recv_timeout(next - Instant::now()) {
-                            // Ok(()) means we received the 'kill' message
-                            Ok(()) => {
-                                info!("Cancelling {}.", check.to_string());
-                                break;
-                            }
-                            // otherwise we timeout so proceed with the check
-                            _ => {
-                                next += check.interval;
-                                debug!("{}.", check.to_string());
-                                match check.do_check() {
-                                    Ok(_) => (),
-                                    Err(e) => {
-                                        warn!("{}. {}.", check.to_string(), e);
-                                        let _t = fail_tx.send(Some(fail_msg.clone()));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-                (tx, h)
-            }).collect();
-    }
-
-    pub fn stop_check_threads(&mut self) {
-        for (tx, h) in self.check_threads.drain(..) {
-            let _t = tx.send(());
-            let _t = h.join();
-        }
-    }
-}
-
-fn stdio(stream: &Option<stream::Stream>) -> Stdio {
-    match stream {
-        Some(stream) => match stream {
-            stream::Stream::File { filename: f } => {
-                if f == "/dev/null" {
-                    Stdio::null()
-                } else {
-                    Stdio::piped()
-                }
-            }
-            _ => Stdio::piped(),
-        },
-        None => Stdio::inherit(),
     }
 }
 

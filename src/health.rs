@@ -21,7 +21,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use crossbeam_channel as cc;
 use libc::statvfs64;
+use rand::{thread_rng, Rng};
 use std::ffi::CString;
 use std::fs::{read_dir, File};
 use std::io::Read;
@@ -29,7 +31,33 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+pub fn recv_checks(checks: &[IntervalHealthCheck]) -> cc::Receiver<(String, String)> {
+    let (fail_send, fail_recv) = cc::unbounded();
+    checks.iter().for_each(|check| {
+        let fail_tx = fail_send.clone();
+        let group = check.group.to_owned();
+        let check = check.clone();
+        thread::spawn(move || {
+            // make the first check happen at random point between now and now + check.interval
+            let mut next =
+                Instant::now()
+                    + Duration::from_secs(thread_rng().gen_range(0, check.interval.as_secs()));
+            let message = check.to_string();
+            loop {
+                thread::sleep((next - Instant::now()).max(Duration::from_secs(0)));
+                next += check.interval;
+                debug!("Healthcheck: {}", message);
+                check.do_check().map_err(|e| {
+                    debug!("Healthcheck failed: {} [{}].", message, e);
+                    fail_tx.send((group.to_owned(), message.to_owned()));
+                });
+            }
+        });
+    });
+    fail_recv
+}
 
 #[derive(Debug, Clone)]
 pub enum HealthCheck {
@@ -58,27 +86,20 @@ impl HealthCheck {
 
 #[derive(Debug, Clone)]
 pub struct IntervalHealthCheck {
+    pub group: String,
     pub interval: Duration,
     pub timeout: Duration,
-    pub the_check: HealthCheck,
+    pub check: HealthCheck,
 }
 
 impl IntervalHealthCheck {
-    pub fn new(interval: Duration, timeout: Duration, check: HealthCheck) -> IntervalHealthCheck {
-        IntervalHealthCheck {
-            interval,
-            timeout,
-            the_check: check,
-        }
-    }
-
     pub fn to_string(&self) -> String {
-        self.the_check.to_string()
+        self.check.to_string()
     }
 
     pub fn do_check(&self) -> Result<(), String> {
         let (tx, rx) = mpsc::channel();
-        let check = self.the_check.clone();
+        let check = self.check.clone();
         thread::spawn(move || {
             let _t = tx.send(check.do_check());
         });

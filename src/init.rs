@@ -21,98 +21,54 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use application::{AppAction, AppState, Application};
-use std::sync::{mpsc, Arc, Mutex};
-use std::{env, thread};
+use application::{AppState, Application};
+use crossbeam_channel as cc;
 use stream;
 
-type AppMutex = Arc<Mutex<Application>>;
-
 pub struct Init {
-    applications: Vec<AppMutex>,
-    fail_tx: mpsc::Sender<Option<AppMutex>>,
-    thread: Option<thread::JoinHandle<()>>,
+    applications: Vec<Application>,
     stream_handler: stream::Handler,
 }
 
 impl Init {
-    pub fn new(mut applications: Vec<Application>) -> Init {
-        let (tx, rx) = mpsc::channel::<Option<AppMutex>>();
-        let fail_tx = tx.clone();
-        let healthcheck_fn = move || {
-            for msg in rx.iter() {
-                if let Some(ap_mutex) = msg {
-                    let mut ap = ap_mutex.lock().unwrap();
-                    match ap.healthcheckfail {
-                        AppAction::Restart => {
-                            ap.stop_check_threads();
-                            ap.restart();
-                            ap.spawn_check_threads(&tx.clone(), Arc::clone(&ap_mutex));
-                        }
-                    }
-                } else {
-                    // None signals return
-                    return ();
-                }
-            }
-        };
-
-        Init {
-            applications: applications
-                .drain(..)
-                .map(|app| Arc::new(Mutex::new(app)))
-                .collect(),
-            fail_tx,
-            thread: Some(thread::spawn(healthcheck_fn)),
+    pub fn run(
+        applications: Vec<Application>,
+        sig_recv: cc::Receiver<i32>,
+        fail_recv: cc::Receiver<(String, String)>,
+    ) {
+        let mut init = Self {
+            applications,
             stream_handler: stream::Handler::new(),
+        };
+        // main event loop
+        loop {
+            if init
+                .applications
+                .iter()
+                .all(|a| a.state == AppState::Stopped)
+            {
+                break;
+            }
+            let mut signal = None;
+            let mut fail: Option<(String, String)> = None;
+            cc::Select::new()
+                .recv(&sig_recv, |s| signal = s)
+                .recv(&fail_recv, |f| fail = f)
+                .wait();
+            if let Some(signal) = signal {
+                init.handle_signal(signal);
+            }
+            if let Some((group, message)) = fail {
+                init.handle_fail(&group, &message)
+            }
         }
     }
 
-    pub fn start(&mut self) -> Result<(), String> {
-        // start the applications
-        self.applications
-            .iter()
-            .try_for_each(|ap_mutex| {
-                ap_mutex
-                    .lock()
-                    .map_err(|e| format!("{}", e))
-                    .and_then(|mut ap| {
-                        ap.start(&self.stream_handler).map_err(|e| {
-                            format!("Failed to start application {}: {}", ap.exec, e)
-                        })?;
-                        ap.spawn_check_threads(&self.fail_tx.clone(), Arc::clone(&ap_mutex));
-                        info!("Successfully spawned application {}", ap.exec);
-                        Ok(())
-                    })
-            }).or_else(|e| {
-                error!("{}", e);
-                self.stop();
-                Err("Some applications failed to start".to_owned())
-            })
+    fn handle_signal(&mut self, _sig: i32) {
+        unimplemented!()
     }
 
-    pub fn stop(&mut self) {
-        // stop all healtcheck threads
-        self.applications.iter().for_each(|ap_mutex| {
-            ap_mutex.lock().unwrap().stop_check_threads();
-        });
-
-        // stop healthcheck synchronisation thread
-        let _t = self.fail_tx.send(None);
-        let _t = self.thread.take().unwrap().join();
-
-        // stop the applications
-        self.applications.iter().rev().for_each(|ap_mutex| {
-            let mut ap = ap_mutex.lock().unwrap();
-            if ap.state == AppState::Running {
-                log(&format!("Stopping {}", ap.exec));
-                ap.stop();
-            }
-        });
+    fn handle_fail(&mut self, _group: &str, _message: &str) {
+        unimplemented!()
     }
-}
-
-fn log(s: &str) {
-    let arg0 = env::args().next().unwrap();
-    eprintln!("{}: {}", arg0, s);
 }

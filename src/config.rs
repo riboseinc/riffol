@@ -148,6 +148,7 @@ enum Stream {
 pub struct Riffol {
     pub applications: Vec<application::Application>,
     pub dependencies: Vec<String>,
+    pub healthchecks: Vec<IntervalHealthCheck>,
 }
 
 pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, String> {
@@ -174,6 +175,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
     let mut riffol = Riffol {
         applications: vec![],
         dependencies: vec![],
+        healthchecks: vec![],
     };
 
     for (_, init) in config.init {
@@ -183,13 +185,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                     for ap_name in &group.applications {
                         match config.application.get(ap_name) {
                             Some(ap) => {
-                                let healthchecks = match get_healthchecks(
-                                    &config.healthchecks,
-                                    &ap.healthchecks,
-                                ) {
-                                    Ok(cs) => cs,
-                                    Err(e) => return Err(e),
-                                };
+                                let healthchecks = ap.healthchecks.clone();
                                 let limits = match get_limits(&config.limits, &ap.limits) {
                                     Ok(ls) => ls,
                                     Err(e) => return Err(e),
@@ -263,10 +259,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     limits,
                                     stdout,
                                     stderr,
-                                    state: AppState::Stopped,
-                                    check_threads: vec![],
-                                    stdout_thread: None,
-                                    stderr_thread: None,
+                                    state: AppState::Idle,
                                 })
                             }
                             None => return Err(format!("No such application \"{}\"", ap_name)),
@@ -286,28 +279,35 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
             }
         }
     }
+    riffol.healthchecks =
+        config
+            .healthchecks
+            .iter()
+            .try_fold(Vec::new(), |checks, (group, check)| {
+                check.checks.iter().try_fold(checks, |mut checks, params| {
+                    mk_interval_healthcheck(group, check.interval, check.timeout, params).map(
+                        |check| {
+                            checks.push(check);
+                            checks
+                        },
+                    )
+                })
+            })?;
 
     Ok(riffol)
 }
 
-fn get_healthchecks(
-    configs: &HashMap<String, HealthChecks>,
-    checks: &[String],
-) -> Result<Vec<IntervalHealthCheck>, String> {
-    checks.iter().try_fold(Vec::new(), |result, check| {
-        configs.get(check).map_or_else(
-            || Err(format!("No such healthcheck \"{}\"", check)),
-            |config| {
-                config.checks.iter().try_fold(result, |mut result, check| {
-                    result.push(IntervalHealthCheck::new(
-                        Duration::from_secs(config.interval),
-                        Duration::from_secs(config.timeout),
-                        mk_healthcheck(check)?,
-                    ));
-                    Ok(result)
-                })
-            },
-        )
+fn mk_interval_healthcheck(
+    group: &str,
+    interval: u64,
+    timeout: u64,
+    check: &str,
+) -> Result<IntervalHealthCheck, String> {
+    Ok(IntervalHealthCheck {
+        group: group.to_owned(),
+        interval: Duration::from_secs(interval),
+        timeout: Duration::from_secs(timeout),
+        check: mk_healthcheck(check)?,
     })
 }
 
