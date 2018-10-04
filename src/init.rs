@@ -23,52 +23,183 @@
 
 use application::{AppState, Application};
 use crossbeam_channel as cc;
+use libc;
+use signal_hook;
+use std::collections::HashMap;
 use stream;
 
 pub struct Init {
-    applications: Vec<Application>,
+    applications: HashMap<String, Application>,
     stream_handler: stream::Handler,
+    sig_recv: cc::Receiver<i32>,
+    fail_recv: cc::Receiver<(String, String)>,
 }
 
 impl Init {
     pub fn run(
-        applications: Vec<Application>,
+        applications: HashMap<String, Application>,
         sig_recv: cc::Receiver<i32>,
         fail_recv: cc::Receiver<(String, String)>,
     ) {
-        let mut init = Self {
+        Self {
             applications,
             stream_handler: stream::Handler::new(),
-        };
-        // main event loop
+            sig_recv,
+            fail_recv,
+        }.run_loop();
+    }
+
+    fn run_loop(&mut self) {
         loop {
-            if init
-                .applications
-                .iter()
-                .all(|a| a.state == AppState::Stopped)
-            {
+            if self.all_stopped() {
                 break;
             }
+
+            self.start_idle_applications();
+            self.stop_stopped_applications();
+
             let mut signal = None;
             let mut fail: Option<(String, String)> = None;
+
             cc::Select::new()
-                .recv(&sig_recv, |s| signal = s)
-                .recv(&fail_recv, |f| fail = f)
+                .recv(&self.sig_recv, |s| signal = s)
+                .recv(&self.fail_recv, |f| fail = f)
                 .wait();
+
             if let Some(signal) = signal {
-                init.handle_signal(signal);
+                self.handle_signal(signal);
             }
             if let Some((group, message)) = fail {
-                init.handle_fail(&group, &message)
+                self.handle_fail(&group, &message)
             }
         }
     }
 
-    fn handle_signal(&mut self, _sig: i32) {
+    fn handle_signal(&mut self, sig: i32) {
+        if sig == signal_hook::SIGCHLD {
+            let mut status: libc::c_int = 0;
+            let pid = unsafe { libc::wait(&mut status) };
+            debug!("SIGCHLD received {} {}", pid, status);
+        }
         unimplemented!()
     }
 
-    fn handle_fail(&mut self, _group: &str, _message: &str) {
-        unimplemented!()
+    fn handle_fail(&mut self, group: &str, _message: &str) {
+        let ids = self
+            .applications
+            .keys()
+            .map(|k| k.to_owned())
+            .collect::<Vec<_>>();
+
+        // find all apps subscribed to the failed healthcheck group
+        let (mut failed, mut ok) = ids.into_iter().partition::<Vec<_>, _>(|id| {
+            self.applications
+                .get(id)
+                .and_then(|a| a.healthchecks.iter().find(|h| *h == group))
+                .is_some()
+        });
+
+        // add all dependencies of failed apps
+        loop {
+            let (mut depends, nodepends) = ok.into_iter().partition::<Vec<_>, _>(|id| {
+                self.applications
+                    .get(id)
+                    .map(|app| {
+                        app.depends
+                            .iter()
+                            .any(|a| failed.iter().find(|b| a == *b).is_some())
+                    }).unwrap()
+            });
+            if depends.is_empty() {
+                break;
+            }
+            failed.append(&mut depends);
+            ok = nodepends;
+        }
+
+        // mark all as Failed
+        failed.iter().for_each(|id| {
+            self.applications.get_mut(id).map(|ap| {
+                let new_state = match ap.state {
+                    AppState::Starting {
+                        pid,
+                        fds,
+                        stop: None,
+                    } => AppState::Starting {
+                        pid,
+                        fds,
+                        stop: Some(true),
+                    },
+                    AppState::Running { stop: None } => AppState::Running { stop: Some(true) },
+                    ref state => state.clone(),
+                };
+                ap.state = new_state;
+            });
+        });
+    }
+
+    fn all_stopped(&self) -> bool {
+        self.applications
+            .values()
+            .all(|a| a.state == AppState::Stopped)
+    }
+
+    fn start_idle_applications(&mut self) {
+        // start idle apps
+        if self
+            .applications
+            .values()
+            .any(|a| a.state == AppState::Idle)
+        {
+            // get list of running apps
+            let running = self
+                .applications
+                .iter()
+                .filter(|(_, a)| a.state == AppState::Running { stop: None })
+                .map(|(k, _)| k.to_owned())
+                .collect::<Vec<_>>();
+
+            self.applications
+                .values_mut()
+                .filter(|a| a.state == AppState::Idle)
+                .for_each(|a| {
+                    if a.depends
+                        .iter()
+                        .all(|d| running.iter().find(|r| d == *r).is_some())
+                    {
+                        a.start();
+                    }
+                });
+        }
+    }
+
+    fn stop_stopped_applications(&mut self) {
+        // get ids of running apps flagged with stop
+        let ids = self
+            .applications
+            .iter()
+            .filter(|(_, app)| match app.state {
+                AppState::Running { stop: Some(_) } => true,
+                _ => false,
+            }).map(|(k, _)| k.to_owned())
+            .collect::<Vec<_>>();
+
+        // filter out those with running dependents
+        let ids = ids.into_iter().filter(|id| {
+            !self.applications.values().any(|app| match app.state {
+                AppState::Idle | AppState::Stopped => false,
+                _ => app.depends.iter().find(|d| *d == id).is_some(),
+            })
+        });
+
+        // stop them
+        ids.into_iter().for_each(|id| {
+            self.applications.get(&id).map(|app| match app.state {
+                AppState::Running {
+                    stop: Some(restart),
+                } => app.stop(restart),
+                _ => unreachable!(),
+            });
+        });
     }
 }

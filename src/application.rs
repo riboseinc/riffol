@@ -10,7 +10,7 @@
 //    documentation and/or other materials provided with the distribution.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NO/T
+// ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 // LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
 // A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
 // OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
@@ -61,16 +61,20 @@ pub struct Application {
     pub stdout: Option<stream::Stream>,
     pub stderr: Option<stream::Stream>,
     pub state: AppState,
+    pub depends: Vec<String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum AppState {
     Idle,
     Starting {
         pid: u32,
         fds: (Option<i32>, Option<i32>, Option<i32>),
+        stop: Option<bool>,
     },
-    Running,
+    Running {
+        stop: Option<bool>,
+    },
     Stopping {
         pid: u32,
         restart: bool,
@@ -79,16 +83,18 @@ pub enum AppState {
 }
 
 impl Application {
-    pub fn start(&self) -> io::Result<AppState> {
-        self.start_process(&self.start)
-            .map(|mut child| AppState::Starting {
+    pub fn start(&mut self) -> io::Result<()> {
+        self.start_process(&self.start).map(|mut child| {
+            self.state = AppState::Starting {
                 pid: child.id(),
                 fds: (
                     child.stdin.take().map(|s| s.into_raw_fd()),
                     child.stdout.take().map(|s| s.into_raw_fd()),
                     child.stderr.take().map(|s| s.into_raw_fd()),
                 ),
-            })
+                stop: None,
+            }
+        })
     }
 
     pub fn stop(&self, restart: bool) -> io::Result<AppState> {

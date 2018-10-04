@@ -76,6 +76,7 @@ struct Application {
     limits: Vec<String>,
     stdout: Option<Stream>,
     stderr: Option<Stream>,
+    requires: Vec<String>,
 }
 
 #[derive(FromValue)]
@@ -146,7 +147,7 @@ enum Stream {
 
 #[derive(Debug)]
 pub struct Riffol {
-    pub applications: Vec<application::Application>,
+    pub applications: HashMap<String, application::Application>,
     pub dependencies: Vec<String>,
     pub healthchecks: Vec<IntervalHealthCheck>,
 }
@@ -173,7 +174,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
     let config = nereon::configure::<Config, _, _>(&nos, args)?;
 
     let mut riffol = Riffol {
-        applications: vec![],
+        applications: HashMap::new(),
         dependencies: vec![],
         healthchecks: vec![],
     };
@@ -228,39 +229,43 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     },
                                 };
 
-                                riffol.applications.push(application::Application {
-                                    exec: ap.exec.clone(),
-                                    dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
-                                    env,
-                                    start: ap
-                                        .start
-                                        .as_ref()
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("start")
-                                        .to_owned(),
-                                    stop: ap
-                                        .stop
-                                        .as_ref()
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("stop")
-                                        .to_owned(),
-                                    restart: ap
-                                        .restart
-                                        .as_ref()
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("restart")
-                                        .to_owned(),
-                                    healthchecks,
-                                    healthcheckfail: ap
-                                        .healthcheckfail
-                                        .as_ref()
-                                        .and_then(|a| a.parse().ok())
-                                        .unwrap_or(AppAction::Restart),
-                                    limits,
-                                    stdout,
-                                    stderr,
-                                    state: AppState::Idle,
-                                })
+                                riffol.applications.insert(
+                                    ap_name.to_owned(),
+                                    application::Application {
+                                        exec: ap.exec.clone(),
+                                        dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
+                                        env,
+                                        start: ap
+                                            .start
+                                            .as_ref()
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("start")
+                                            .to_owned(),
+                                        stop: ap
+                                            .stop
+                                            .as_ref()
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("stop")
+                                            .to_owned(),
+                                        restart: ap
+                                            .restart
+                                            .as_ref()
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("restart")
+                                            .to_owned(),
+                                        healthchecks,
+                                        healthcheckfail: ap
+                                            .healthcheckfail
+                                            .as_ref()
+                                            .and_then(|a| a.parse().ok())
+                                            .unwrap_or(AppAction::Restart),
+                                        limits,
+                                        stdout,
+                                        stderr,
+                                        depends: ap.requires.iter().map(|r| r.to_owned()).collect(),
+                                        state: AppState::Idle,
+                                    },
+                                );
                             }
                             None => return Err(format!("No such application \"{}\"", ap_name)),
                         }
@@ -499,23 +504,5 @@ mod tests {
         let config: HashMap<String, HashMap<String, u64>> =
             vec![("1".to_owned(), limits)].iter().cloned().collect();
         assert!(get_limits(&config, &vec!["1".to_owned()]).is_err());
-
-        /*
-        let limits: HashMap<String, u64> = [
-            ("max_procs".to_owned(), 64),
-            ("max_procs".to_owned(), 32),
-        ].iter().cloned().collect();
-        let config: HashMap<String, HashMap<String, u64>> = vec![
-            ("1".to_owned(), limits)
-        ].iter().cloned().collect();
-        assert_eq!(
-            get_limits(&config, &vec!["1".to_owned()]),
-            Ok(vec![
-                RLimit::Procs(Limit::Num(32)),
-                RLimit::Memory(Limit::Infinity),
-                RLimit::Files(Limit::Infinity),
-                ]
-                ).is_err());
-*/
     }
 }
