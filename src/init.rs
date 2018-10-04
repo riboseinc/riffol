@@ -78,8 +78,45 @@ impl Init {
     fn handle_signal(&mut self, sig: i32) {
         if sig == signal_hook::SIGCHLD {
             let mut status: libc::c_int = 0;
-            let pid = unsafe { libc::wait(&mut status) };
+            let pid = unsafe { libc::wait(&mut status) } as u32;
             debug!("SIGCHLD received {} {}", pid, status);
+            self.applications
+                .values_mut()
+                .find(|app| match app.state {
+                    AppState::Starting {
+                        pid: p,
+                        fds: _,
+                        stop: _,
+                    }
+                        if p == pid =>
+                    {
+                        true
+                    }
+                    AppState::Stopping { pid: p, restart: _ } if p == pid => true,
+                    _ => false,
+                }).map(|app| match app.state {
+                    AppState::Starting {
+                        pid: _,
+                        fds: _,
+                        stop: None,
+                    } => app.state = AppState::Running { stop: None },
+                    AppState::Starting {
+                        pid: _,
+                        fds: _,
+                        stop: Some(restart),
+                    } => {
+                        app.stop(restart).ok();
+                    }
+                    AppState::Stopping {
+                        pid: _,
+                        restart: true,
+                    } => app.state = AppState::Idle,
+                    AppState::Stopping {
+                        pid: _,
+                        restart: false,
+                    } => app.state = AppState::Stopped,
+                    _ => unreachable!(),
+                });
         }
         unimplemented!()
     }
