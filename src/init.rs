@@ -98,14 +98,12 @@ impl Init {
                     AppState::Starting {
                         pid: _,
                         fds: _,
-                        stop: None,
-                    } => app.state = AppState::Running { stop: None },
-                    AppState::Starting {
-                        pid: _,
-                        fds: _,
-                        stop: Some(restart),
+                        stop,
                     } => {
-                        app.stop(restart).ok();
+                        app.state = AppState::Running { stop: None };
+                        if let Some(restart) = stop {
+                            app.stop(restart);
+                        }
                     }
                     AppState::Stopping {
                         pid: _,
@@ -131,7 +129,7 @@ impl Init {
                         }
                     }
                     AppState::Running { stop: _ } => {
-                        app.state = AppState::Running { stop: Some(false) }
+                        app.stop(false);
                     }
                     AppState::Stopping { pid, restart: _ } => {
                         app.state = AppState::Stopping {
@@ -179,21 +177,24 @@ impl Init {
 
         // mark all as Failed
         failed.iter().for_each(|id| {
-            self.applications.get_mut(id).map(|ap| {
-                let new_state = match ap.state {
+            self.applications.get_mut(id).map(|app| {
+                match app.state {
                     AppState::Starting {
                         pid,
                         fds,
                         stop: None,
-                    } => AppState::Starting {
-                        pid,
-                        fds,
-                        stop: Some(true),
-                    },
-                    AppState::Running { stop: None } => AppState::Running { stop: Some(true) },
-                    ref state => state.clone(),
+                    } => {
+                        app.state = AppState::Starting {
+                            pid,
+                            fds,
+                            stop: Some(true),
+                        }
+                    }
+                    AppState::Running { stop: None } => {
+                        app.state = AppState::Running { stop: Some(true) }
+                    }
+                    _ => (),
                 };
-                ap.state = new_state;
             });
         });
     }
