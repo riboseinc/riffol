@@ -100,9 +100,10 @@ impl Init {
                         fds: _,
                         stop,
                     } => {
-                        app.state = AppState::Running { stop: None };
                         if let Some(restart) = stop {
                             app.stop(restart);
+                        } else {
+                            app.state = AppState::Running { stop: None };
                         }
                     }
                     AppState::Stopping {
@@ -246,16 +247,18 @@ impl Init {
             .collect::<Vec<_>>();
 
         // filter out those with running dependents
-        let ids = ids.into_iter().filter(|id| {
-            !self.applications.values().any(|app| match app.state {
-                AppState::Idle | AppState::Stopped => false,
-                _ => app.depends.iter().find(|d| *d == id).is_some(),
-            })
-        });
+        let ids = ids
+            .into_iter()
+            .filter(|id| {
+                !self.applications.values().any(|app| match app.state {
+                    AppState::Idle | AppState::Stopped => false,
+                    _ => app.depends.iter().find(|d| *d == id).is_some(),
+                })
+            }).collect::<Vec<_>>();
 
         // stop them
         ids.into_iter().for_each(|id| {
-            self.applications.get(&id).map(|app| match app.state {
+            self.applications.get_mut(&id).map(|app| match app.state {
                 AppState::Running {
                     stop: Some(restart),
                 } => app.stop(restart),

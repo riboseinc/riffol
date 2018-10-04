@@ -97,12 +97,13 @@ impl Application {
         })
     }
 
-    pub fn stop(&self, restart: bool) -> io::Result<AppState> {
-        self.start_process(&self.stop)
-            .map(|child| AppState::Stopping {
+    pub fn stop(&mut self, restart: bool) -> io::Result<()> {
+        self.start_process(&self.stop).map(|child| {
+            self.state = AppState::Stopping {
                 pid: child.id(),
                 restart,
-            })
+            }
+        })
     }
 
     fn start_process(&self, arg: &str) -> io::Result<Child> {
