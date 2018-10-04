@@ -31,5 +31,5 @@ fn main() {
         .init()
         .unwrap();
 
-    riffol::riffol(std::env::args());
+    riffol::riffol(std::env::args()).ok();
 }

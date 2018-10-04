@@ -46,13 +46,15 @@ pub fn recv_checks(checks: &[IntervalHealthCheck]) -> cc::Receiver<(String, Stri
                     + Duration::from_secs(thread_rng().gen_range(0, check.interval.as_secs()));
             let message = check.to_string();
             loop {
-                thread::sleep((next - Instant::now()).max(Duration::from_secs(0)));
+                thread::sleep(next - (Instant::now().max(next)));
                 next += check.interval;
                 debug!("Healthcheck: {}", message);
-                check.do_check().map_err(|e| {
-                    debug!("Healthcheck failed: {} [{}].", message, e);
-                    fail_tx.send((group.to_owned(), message.to_owned()));
-                });
+                check
+                    .do_check()
+                    .map_err(|e| {
+                        debug!("Healthcheck failed: {} [{}].", message, e);
+                        fail_tx.send((group.to_owned(), message.to_owned()));
+                    }).ok();
             }
         });
     });

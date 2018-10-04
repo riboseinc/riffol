@@ -113,7 +113,7 @@ impl Application {
                 .map(|stream| match stream {
                     stream::Stream::File { filename: f } if f == "/dev/null" => Stdio::null(),
                     _ => Stdio::piped(),
-                }).unwrap_or_else(|| Stdio::inherit())
+                }).unwrap_or_else(Stdio::inherit)
         }
 
         let limits = self.limits.clone();
