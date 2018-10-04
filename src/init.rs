@@ -117,8 +117,31 @@ impl Init {
                     } => app.state = AppState::Stopped,
                     _ => unreachable!(),
                 });
+        } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
+            debug!("Received termination signal ({})", sig);
+            self.applications
+                .values_mut()
+                .for_each(|app| match app.state {
+                    AppState::Idle => app.state = AppState::Stopped,
+                    AppState::Starting { pid, fds, stop: _ } => {
+                        app.state = AppState::Starting {
+                            pid,
+                            fds,
+                            stop: Some(false),
+                        }
+                    }
+                    AppState::Running { stop: _ } => {
+                        app.state = AppState::Running { stop: Some(false) }
+                    }
+                    AppState::Stopping { pid, restart: _ } => {
+                        app.state = AppState::Stopping {
+                            pid,
+                            restart: false,
+                        }
+                    }
+                    AppState::Stopped => (),
+                })
         }
-        unimplemented!()
     }
 
     fn handle_fail(&mut self, group: &str, _message: &str) {
