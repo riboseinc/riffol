@@ -28,8 +28,8 @@ use std::thread;
 pub fn recv_signals() -> cc::Receiver<i32> {
     // set us up to adopt zombies from subprocesses
     #[cfg(target_os = "linux")]
-    use libc;
     {
+        use libc;
         static PR_SET_CHILD_SUBREAPER: libc::c_int = 36;
 
         if unsafe { libc::getpid() != 1 && libc::prctl(PR_SET_CHILD_SUBREAPER, 1) != 0 } {

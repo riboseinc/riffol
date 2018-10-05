@@ -148,7 +148,7 @@ impl DfCheck {
             use libc::statvfs;
             let mut stats: statvfs = ::std::mem::uninitialized();
             if statvfs(self.path.as_ptr(), &mut stats) == 0 {
-                Ok(stats.f_bsize * stats.f_bavail / 1024 / 1024)
+                Ok(stats.f_bsize as u64 * (stats.f_bavail / 1024 / 1024) as u64)
             } else {
                 Err("Couldn't read".to_owned())
                 //Err(libc::strerror(*__errno_location()))

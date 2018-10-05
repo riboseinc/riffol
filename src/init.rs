@@ -144,7 +144,7 @@ impl Init {
                 .is_some()
         });
 
-        // add all dependencies of failed apps
+        // add all dependents of failed apps
         loop {
             let (mut depends, nodepends) = ok.into_iter().partition::<Vec<_>, _>(|id| {
                 self.applications
