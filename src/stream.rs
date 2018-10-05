@@ -21,24 +21,18 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate log;
-extern crate mio;
-extern crate nix;
-extern crate slab;
-extern crate syslog;
-
-use self::mio::unix::{EventedFd, UnixReady};
-use self::mio::{Events, Poll, PollOpt, Ready, Token};
-use self::nix::fcntl::{fcntl, FcntlArg::F_SETFL, OFlag};
-use self::slab::Slab;
-use self::syslog::{Formatter3164, Logger, LoggerBackend, Severity::*};
+use crossbeam_channel as cc;
+use mio::unix::{EventedFd, UnixReady};
+use mio::{Events, Poll, PollOpt, Ready, Token};
+use nix::fcntl::{fcntl, FcntlArg::F_SETFL, OFlag};
+use slab::Slab;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::SocketAddr;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use syslog::{self, Formatter3164, Logger, LoggerBackend, Severity::*};
 
 /// Address used for various flavours of Syslog.
 #[derive(Debug, Clone)]
@@ -99,7 +93,7 @@ impl Connection {
 /// highly inefficient but saves having to maintain TCP connections
 /// and has avoids writing to unlinked (eg. `logrotate`d) files.
 pub struct Handler {
-    channel: mpsc::Sender<Message>,
+    channel: cc::Sender<Message>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -108,7 +102,7 @@ impl Handler {
     /// background thread to shuffle data between standard streams and
     /// destintions specified by `Stream`
     pub fn new() -> Handler {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = cc::unbounded();
         Handler {
             channel: tx,
             thread: Some(thread::spawn(move || {
@@ -119,12 +113,10 @@ impl Handler {
 
     /// Sends a message to background thread to monitor source `fd` and
     /// write to `Stream`
-    pub fn add_stream(&self, fd: RawFd, stream: &Stream) -> io::Result<()> {
+    pub fn add_stream(&self, fd: RawFd, stream: Stream) {
         // send message to handler thread
         println!("Adding fd {}", fd);
-        self.channel
-            .send(Message::Add(fd, stream.clone()))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))
+        self.channel.send(Message::Add(fd, stream))
     }
 }
 
@@ -132,7 +124,7 @@ impl Handler {
 /// to the mio thread and wait for it to finish.
 impl Drop for Handler {
     fn drop(&mut self) {
-        self.channel.send(Message::Close).unwrap();
+        self.channel.send(Message::Close);
         self.thread.take().unwrap().join().unwrap();
     }
 }
@@ -151,12 +143,12 @@ enum Message {
 ///     poll fds with mio (using a timeout)
 ///     read all readable fds until `WouldBlock`
 ///     deregister any fds that have closed
-fn handler(channel: &mpsc::Receiver<Message>) {
+fn handler(channel: &cc::Receiver<Message>) {
     let mut connections = Slab::with_capacity(128);
     let poll = Poll::new().unwrap();
     let mut closed = false;
     while !closed {
-        if let Ok(message) = channel.try_recv() {
+        if let Some(message) = channel.try_recv() {
             match message {
                 Message::Add(fd, stream) => {
                     if let Err(e) = poll.register(
@@ -307,18 +299,22 @@ mod test {
             .spawn()
             .unwrap();
 
-        handler
-            .add_stream(child1.stdout.take().unwrap().into_raw_fd(), &Stream::Stdout)
-            .unwrap();
-        handler
-            .add_stream(child1.stderr.take().unwrap().into_raw_fd(), &Stream::Stdout)
-            .unwrap();
-        handler
-            .add_stream(child2.stdout.take().unwrap().into_raw_fd(), &Stream::Stdout)
-            .unwrap();
-        handler
-            .add_stream(child2.stderr.take().unwrap().into_raw_fd(), &Stream::Stdout)
-            .unwrap();
+        handler.add_stream(
+            child1.stdout.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
+        handler.add_stream(
+            child1.stderr.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
+        handler.add_stream(
+            child2.stdout.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
+        handler.add_stream(
+            child2.stderr.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
 
         child2.wait().unwrap();
         child1.wait().unwrap();

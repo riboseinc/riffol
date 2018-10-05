@@ -1,17 +1,30 @@
 [package]
 name = "riffol"
-version = "0.1.1"
-authors = ["John Hedges <john@drystone.co.uk>"]
+description = "Riffol is a supervising process that can run as a traditional daemon on Unix-like systems or as an `init` system for containers"
+version = "0.1.2"
+repository = "https://github.com/riboseinc/riffol"
+authors = ["John Hedges <john@drystone.co.uk>", "Ribose Inc. <open.source@ribose.com>"]
 license = "BSD-2-Clause"
+exclude = [
+    "ci/**",
+    "examples/**",
+    ".git-hooks/pre-commit",
+    ".gitignore",
+    "Jenkinsfile",
+    "riffol.png",
+    ".travis.yml",
+    ]
 
 [dependencies]
-chan-signal = "0.3"
+crossbeam-channel = "0.2"
 libc = "0.2"
 log = "0.4"
 mio = "0.6"
 nereon = "0.3"
 nereon_derive = "0.2"
 nix = "0.11"
+rand = "0.5"
+signal-hook = "0.1"
 slab = "0.4"
 stderrlog = "0.4"
 syslog = "4.0"

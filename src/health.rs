@@ -21,12 +21,44 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use crossbeam_channel as cc;
+use rand::{thread_rng, Rng};
+use std::ffi::CString;
+use std::fs::{read_dir, File};
+use std::io::Read;
 use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+pub fn recv_checks(checks: &[IntervalHealthCheck]) -> cc::Receiver<(String, String)> {
+    let (fail_send, fail_recv) = cc::unbounded();
+    checks.iter().for_each(|check| {
+        let fail_tx = fail_send.clone();
+        let group = check.group.to_owned();
+        let check = check.clone();
+        thread::spawn(move || {
+            // make the first check happen at random point between now and now + check.interval
+            let mut next =
+                Instant::now()
+                    + Duration::from_secs(thread_rng().gen_range(0, check.interval.as_secs()));
+            let message = check.to_string();
+            loop {
+                thread::sleep(next - (Instant::now().min(next)));
+                next += check.interval;
+                debug!("Healthcheck: {}", message);
+                check
+                    .do_check()
+                    .map_err(|e| {
+                        debug!("Healthcheck failed: {} [{}].", message, e);
+                        fail_tx.send((group.to_owned(), message.to_owned()));
+                    }).ok();
+            }
+        });
+    });
+    fail_recv
+}
 
 #[derive(Debug, Clone)]
 pub enum HealthCheck {
@@ -55,47 +87,39 @@ impl HealthCheck {
 
 #[derive(Debug, Clone)]
 pub struct IntervalHealthCheck {
+    pub group: String,
     pub interval: Duration,
     pub timeout: Duration,
-    pub the_check: HealthCheck,
+    pub check: HealthCheck,
 }
 
 impl IntervalHealthCheck {
-    pub fn new(interval: Duration, timeout: Duration, check: HealthCheck) -> IntervalHealthCheck {
-        IntervalHealthCheck {
-            interval,
-            timeout,
-            the_check: check,
-        }
-    }
-
     pub fn to_string(&self) -> String {
-        self.the_check.to_string()
+        self.check.to_string()
     }
 
     pub fn do_check(&self) -> Result<(), String> {
         let (tx, rx) = mpsc::channel();
-        let check = self.the_check.clone();
+        let check = self.check.clone();
         thread::spawn(move || {
             let _t = tx.send(check.do_check());
         });
-        match rx.recv_timeout(self.timeout) {
-            Ok(res) => res,
-            Err(_) => Err("Timeout".to_owned()),
-        }
+        rx.recv_timeout(self.timeout)
+            .map_err(|_| "Timeout".to_owned())
+            .and_then(|res| res)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct DfCheck {
     free: u64,
-    path: PathBuf,
+    path: CString,
 }
 
 impl DfCheck {
     pub fn new(path: &Path, free: u64) -> DfCheck {
         DfCheck {
-            path: PathBuf::from(path),
+            path: CString::new(path.to_string_lossy().into_owned()).unwrap(),
             free,
         }
     }
@@ -105,31 +129,42 @@ impl DfCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        fn avail(o: &[u8]) -> Option<u64> {
-            match String::from_utf8_lossy(o).lines().nth(1) {
-                Some(s) => match s.trim_right_matches('M').parse::<u64>() {
-                    Ok(n) => Some(n),
-                    Err(_) => None,
-                },
-                None => None,
+        #[cfg(statvfs64)]
+        // use statvfs to get blocks available to unpriviliged users
+        let free = unsafe {
+            use libc::statvfs64;
+            let mut stats: statvfs64 = ::std::mem::uninitialized();
+            if statvfs64(self.path.as_ptr(), &mut stats) == 0 {
+                Ok(stats.f_bsize as u64 * stats.f_bavail / 1024 / 1024)
+            } else {
+                Err("Couldn't read".to_owned())
+                //Err(libc::strerror(*__errno_location()))
             }
         };
 
-        let fail = "Failed to get free space";
-        match Command::new("/bin/df")
-            .arg("-BM")
-            .arg("--output=avail")
-            .arg(&self.path)
-            .stderr(Stdio::null())
-            .output()
-        {
-            Ok(o) => match (o.status.success(), avail(&o.stdout)) {
-                (true, Some(n)) if n >= self.free => Ok(()),
-                (true, Some(n)) => Err(format!("{}MB free", n,)),
-                _ => Err(fail.to_owned()),
-            },
-            _ => Err(fail.to_owned()),
-        }
+        #[cfg(not(statvfs64))]
+        // use statvfs to get blocks available to unpriviliged users
+        let free = unsafe {
+            use libc::statvfs;
+            let mut stats: statvfs = ::std::mem::uninitialized();
+            if statvfs(self.path.as_ptr(), &mut stats) == 0 {
+                Ok(stats.f_bsize as u64 * (stats.f_bavail / 1024 / 1024) as u64)
+            } else {
+                Err("Couldn't read".to_owned())
+                //Err(libc::strerror(*__errno_location()))
+            }
+        };
+
+        free.and_then(|f| {
+            if f > self.free {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Insufficient disk space. {}MB available, {}MB required",
+                    f, self.free
+                ))
+            }
+        })
     }
 }
 
@@ -149,16 +184,33 @@ impl ProcCheck {
         format!("Proc healthcheck, checking for {}", self.process)
     }
 
+    // match against /proc/pid/comm
+    // zombie if /proc/pid/cmdline is empty
     fn do_check(&self) -> Result<(), String> {
-        match Command::new("pidof")
-            .arg(&self.process)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-        {
-            Ok(s) if s.success() => Ok(()),
-            _ => Err("No such process".to_owned()),
-        }
+        read_dir("/proc")
+            .map_err(|_| "Couldn't read procfs".to_owned())
+            .and_then(|mut it| {
+                it.find(|ref result| {
+                    result
+                        .as_ref()
+                        .ok()
+                        .and_then(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+                        .filter(|pid| {
+                            let mut contents = String::new();
+                            File::open(format!("/proc/{}/comm", pid))
+                                .and_then(|mut f| f.read_to_string(&mut contents))
+                                .map(|_| {
+                                    contents.pop();
+                                    contents == self.process
+                                }).unwrap_or(false)
+                        }).map(|pid| {
+                            File::open(format!("/proc/{}/cmdline", pid))
+                                .ok()
+                                .map_or_else(|| false, |f| f.bytes().next().is_some())
+                        }).unwrap_or(false)
+                }).ok_or_else(|| "No such process".to_owned())
+                .map(|_| ())
+            })
     }
 }
 
@@ -177,9 +229,8 @@ impl TcpCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
-        match TcpStream::connect(&self.addr) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed ({})", e)),
-        }
+        TcpStream::connect(&self.addr)
+            .map(|_| ())
+            .map_err(|e| format!("Failed ({})", e))
     }
 }

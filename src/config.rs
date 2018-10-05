@@ -21,8 +21,6 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate syslog;
-
 use application::{self, AppAction, AppState};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
@@ -35,6 +33,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 use stream;
+use syslog;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
@@ -76,6 +75,7 @@ struct Application {
     limits: Vec<String>,
     stdout: Option<Stream>,
     stderr: Option<Stream>,
+    requires: Vec<String>,
 }
 
 #[derive(FromValue)]
@@ -146,8 +146,9 @@ enum Stream {
 
 #[derive(Debug)]
 pub struct Riffol {
-    pub applications: Vec<application::Application>,
+    pub applications: HashMap<String, application::Application>,
     pub dependencies: Vec<String>,
+    pub healthchecks: Vec<IntervalHealthCheck>,
 }
 
 pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, String> {
@@ -172,8 +173,9 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
     let config = nereon::configure::<Config, _, _>(&nos, args)?;
 
     let mut riffol = Riffol {
-        applications: vec![],
+        applications: HashMap::new(),
         dependencies: vec![],
+        healthchecks: vec![],
     };
 
     for (_, init) in config.init {
@@ -183,13 +185,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                     for ap_name in &group.applications {
                         match config.application.get(ap_name) {
                             Some(ap) => {
-                                let healthchecks = match get_healthchecks(
-                                    &config.healthchecks,
-                                    &ap.healthchecks,
-                                ) {
-                                    Ok(cs) => cs,
-                                    Err(e) => return Err(e),
-                                };
+                                let healthchecks = ap.healthchecks.clone();
                                 let limits = match get_limits(&config.limits, &ap.limits) {
                                     Ok(ls) => ls,
                                     Err(e) => return Err(e),
@@ -232,42 +228,43 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     },
                                 };
 
-                                riffol.applications.push(application::Application {
-                                    exec: ap.exec.clone(),
-                                    dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
-                                    env,
-                                    start: ap
-                                        .start
-                                        .as_ref()
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("start")
-                                        .to_owned(),
-                                    stop: ap
-                                        .stop
-                                        .as_ref()
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("stop")
-                                        .to_owned(),
-                                    restart: ap
-                                        .restart
-                                        .as_ref()
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("restart")
-                                        .to_owned(),
-                                    healthchecks,
-                                    healthcheckfail: ap
-                                        .healthcheckfail
-                                        .as_ref()
-                                        .and_then(|a| a.parse().ok())
-                                        .unwrap_or(AppAction::Restart),
-                                    limits,
-                                    stdout,
-                                    stderr,
-                                    state: AppState::Stopped,
-                                    check_threads: vec![],
-                                    stdout_thread: None,
-                                    stderr_thread: None,
-                                })
+                                riffol.applications.insert(
+                                    ap_name.to_owned(),
+                                    application::Application {
+                                        exec: ap.exec.clone(),
+                                        dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
+                                        env,
+                                        start: ap
+                                            .start
+                                            .as_ref()
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("start")
+                                            .to_owned(),
+                                        stop: ap
+                                            .stop
+                                            .as_ref()
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("stop")
+                                            .to_owned(),
+                                        restart: ap
+                                            .restart
+                                            .as_ref()
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("restart")
+                                            .to_owned(),
+                                        healthchecks,
+                                        healthcheckfail: ap
+                                            .healthcheckfail
+                                            .as_ref()
+                                            .and_then(|a| a.parse().ok())
+                                            .unwrap_or(AppAction::Restart),
+                                        limits,
+                                        stdout,
+                                        stderr,
+                                        depends: ap.requires.iter().map(|r| r.to_owned()).collect(),
+                                        state: AppState::Idle,
+                                    },
+                                );
                             }
                             None => return Err(format!("No such application \"{}\"", ap_name)),
                         }
@@ -286,28 +283,35 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
             }
         }
     }
+    riffol.healthchecks =
+        config
+            .healthchecks
+            .iter()
+            .try_fold(Vec::new(), |checks, (group, check)| {
+                check.checks.iter().try_fold(checks, |mut checks, params| {
+                    mk_interval_healthcheck(group, check.interval, check.timeout, params).map(
+                        |check| {
+                            checks.push(check);
+                            checks
+                        },
+                    )
+                })
+            })?;
 
     Ok(riffol)
 }
 
-fn get_healthchecks(
-    configs: &HashMap<String, HealthChecks>,
-    checks: &[String],
-) -> Result<Vec<IntervalHealthCheck>, String> {
-    checks.iter().try_fold(Vec::new(), |result, check| {
-        configs.get(check).map_or_else(
-            || Err(format!("No such healthcheck \"{}\"", check)),
-            |config| {
-                config.checks.iter().try_fold(result, |mut result, check| {
-                    result.push(IntervalHealthCheck::new(
-                        Duration::from_secs(config.interval),
-                        Duration::from_secs(config.timeout),
-                        mk_healthcheck(check)?,
-                    ));
-                    Ok(result)
-                })
-            },
-        )
+fn mk_interval_healthcheck(
+    group: &str,
+    interval: u64,
+    timeout: u64,
+    check: &str,
+) -> Result<IntervalHealthCheck, String> {
+    Ok(IntervalHealthCheck {
+        group: group.to_owned(),
+        interval: Duration::from_secs(interval),
+        timeout: Duration::from_secs(timeout),
+        check: mk_healthcheck(check)?,
     })
 }
 
@@ -499,23 +503,5 @@ mod tests {
         let config: HashMap<String, HashMap<String, u64>> =
             vec![("1".to_owned(), limits)].iter().cloned().collect();
         assert!(get_limits(&config, &vec!["1".to_owned()]).is_err());
-
-        /*
-        let limits: HashMap<String, u64> = [
-            ("max_procs".to_owned(), 64),
-            ("max_procs".to_owned(), 32),
-        ].iter().cloned().collect();
-        let config: HashMap<String, HashMap<String, u64>> = vec![
-            ("1".to_owned(), limits)
-        ].iter().cloned().collect();
-        assert_eq!(
-            get_limits(&config, &vec!["1".to_owned()]),
-            Ok(vec![
-                RLimit::Procs(Limit::Num(32)),
-                RLimit::Memory(Limit::Infinity),
-                RLimit::Files(Limit::Infinity),
-                ]
-                ).is_err());
-*/
     }
 }
