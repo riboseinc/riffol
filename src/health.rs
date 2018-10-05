@@ -130,6 +130,19 @@ impl DfCheck {
     }
 
     fn do_check(&self) -> Result<(), String> {
+        #[cfg(statvfs64)]
+        // use statvfs to get blocks available to unpriviliged users
+        let free = unsafe {
+            let mut stats: statvfs64 = ::std::mem::uninitialized();
+            if statvfs64(self.path.as_ptr(), &mut stats) == 0 {
+                Ok(stats.f_bsize as u64 * stats.f_bavail / 1024 / 1024)
+            } else {
+                Err("Couldn't read".to_owned())
+                //Err(libc::strerror(*__errno_location()))
+            }
+        };
+
+        #[cfg(not(statvfs64))]
         // use statvfs to get blocks available to unpriviliged users
         let free = unsafe {
             let mut stats: statvfs64 = ::std::mem::uninitialized();

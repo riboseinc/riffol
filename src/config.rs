@@ -21,8 +21,6 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate syslog;
-
 use application::{self, AppAction, AppState};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
@@ -35,6 +33,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 use stream;
+use syslog;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
