@@ -46,7 +46,7 @@ pub fn recv_checks(checks: &[IntervalHealthCheck]) -> cc::Receiver<(String, Stri
                     + Duration::from_secs(thread_rng().gen_range(0, check.interval.as_secs()));
             let message = check.to_string();
             loop {
-                thread::sleep(next - (Instant::now().max(next)));
+                thread::sleep(next - (Instant::now().min(next)));
                 next += check.interval;
                 debug!("Healthcheck: {}", message);
                 check
