@@ -204,14 +204,32 @@ impl Init {
                 .map(|(k, _)| k.to_owned())
                 .collect::<Vec<_>>();
 
+            let mut streams = Vec::new();
             self.applications
                 .values_mut()
                 .filter(|a| a.state == AppState::Idle)
-                .for_each(|a| {
-                    if a.depends.iter().all(|d| running.iter().any(|r| d == r)) {
-                        a.start().ok();
+                .for_each(|ap| {
+                    if ap.depends.iter().all(|d| running.iter().any(|r| d == r)) {
+                        ap.start().ok();
+                        if let AppState::Starting {
+                            fds: (_, Some(stdout), _),
+                            ..
+                        } = ap.state
+                        {
+                            streams.push((stdout, ap.stdout.clone()));
+                        }
+                        if let AppState::Starting {
+                            fds: (_, _, Some(stderr)),
+                            ..
+                        } = ap.state
+                        {
+                            streams.push((stderr, ap.stderr.clone()));
+                        }
                     }
                 });
+            streams
+                .drain(..)
+                .for_each(|(fd, s)| self.stream_handler.add_stream(fd, s.unwrap()));
         }
     }
 

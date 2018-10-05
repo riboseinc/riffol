@@ -113,10 +113,10 @@ impl Handler {
 
     /// Sends a message to background thread to monitor source `fd` and
     /// write to `Stream`
-    pub fn add_stream(&self, fd: RawFd, stream: &Stream) {
+    pub fn add_stream(&self, fd: RawFd, stream: Stream) {
         // send message to handler thread
         println!("Adding fd {}", fd);
-        self.channel.send(Message::Add(fd, stream.clone()))
+        self.channel.send(Message::Add(fd, stream))
     }
 }
 
@@ -299,10 +299,22 @@ mod test {
             .spawn()
             .unwrap();
 
-        handler.add_stream(child1.stdout.take().unwrap().into_raw_fd(), &Stream::Stdout);
-        handler.add_stream(child1.stderr.take().unwrap().into_raw_fd(), &Stream::Stdout);
-        handler.add_stream(child2.stdout.take().unwrap().into_raw_fd(), &Stream::Stdout);
-        handler.add_stream(child2.stderr.take().unwrap().into_raw_fd(), &Stream::Stdout);
+        handler.add_stream(
+            child1.stdout.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
+        handler.add_stream(
+            child1.stderr.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
+        handler.add_stream(
+            child2.stdout.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
+        handler.add_stream(
+            child2.stderr.take().unwrap().into_raw_fd(),
+            Stream::Stdout.clone(),
+        );
 
         child2.wait().unwrap();
         child1.wait().unwrap();
