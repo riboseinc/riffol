@@ -22,13 +22,13 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use crossbeam_channel as cc;
-use libc;
 use signal_hook;
 use std::thread;
 
 pub fn recv_signals() -> cc::Receiver<i32> {
     // set us up to adopt zombies from subprocesses
     #[cfg(target_os = "linux")]
+    use libc;
     {
         static PR_SET_CHILD_SUBREAPER: libc::c_int = 36;
 

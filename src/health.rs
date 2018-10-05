@@ -22,7 +22,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use crossbeam_channel as cc;
-use libc::statvfs64;
 use rand::{thread_rng, Rng};
 use std::ffi::CString;
 use std::fs::{read_dir, File};
@@ -133,6 +132,7 @@ impl DfCheck {
         #[cfg(statvfs64)]
         // use statvfs to get blocks available to unpriviliged users
         let free = unsafe {
+            use libc::statvfs64;
             let mut stats: statvfs64 = ::std::mem::uninitialized();
             if statvfs64(self.path.as_ptr(), &mut stats) == 0 {
                 Ok(stats.f_bsize as u64 * stats.f_bavail / 1024 / 1024)
@@ -145,9 +145,10 @@ impl DfCheck {
         #[cfg(not(statvfs64))]
         // use statvfs to get blocks available to unpriviliged users
         let free = unsafe {
-            let mut stats: statvfs64 = ::std::mem::uninitialized();
-            if statvfs64(self.path.as_ptr(), &mut stats) == 0 {
-                Ok(stats.f_bsize as u64 * stats.f_bavail / 1024 / 1024)
+            use libc::statvfs;
+            let mut stats: statvfs = ::std::mem::uninitialized();
+            if statvfs(self.path.as_ptr(), &mut stats) == 0 {
+                Ok(stats.f_bsize * stats.f_bavail / 1024 / 1024)
             } else {
                 Err("Couldn't read".to_owned())
                 //Err(libc::strerror(*__errno_location()))
