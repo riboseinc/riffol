@@ -19,6 +19,6 @@ COPY wordpress.sql /tmp
 COPY initialise-mysql.sh /tmp
 COPY riffol.conf /etc
 
-RUN /root/.cargo/bin/cargo install --git https://github.com/riboseinc/riffol --branch dev
+RUN /root/.cargo/bin/cargo install riffol
 
 ENTRYPOINT ["/root/.cargo/bin/riffol",  "-f",  "/etc/riffol.conf"]

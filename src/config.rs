@@ -26,12 +26,12 @@ use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
 use nereon::{self, FromValue, Value};
 use std::collections::HashMap;
-use std::fs;
 use std::iter::Iterator;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
+use std::{env, fs};
 use stream;
 use syslog;
 
@@ -62,10 +62,16 @@ struct AppGroup {
 }
 
 #[derive(FromValue)]
+struct Environment {
+    pass: HashMap<String, String>,
+    new: HashMap<String, String>,
+}
+
+#[derive(FromValue)]
 struct Application {
     exec: String,
     dir: Option<String>,
-    env: HashMap<String, String>,
+    env: Option<Environment>,
     env_file: Option<String>,
     start: Option<String>,
     stop: Option<String>,
@@ -190,27 +196,21 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     Ok(ls) => ls,
                                     Err(e) => return Err(e),
                                 };
-                                let mut env = match ap.env_file {
-                                    Some(ref file) => match fs::read_to_string(file) {
-                                        Ok(s) => s
-                                            .lines()
-                                            .map(|v| {
-                                                let kv = v.splitn(2, '=').collect::<Vec<&str>>();
-                                                match kv.len() {
-                                                    1 => (kv[0].to_owned(), "".to_owned()),
-                                                    _ => (kv[0].to_owned(), kv[1].to_owned()),
-                                                }
-                                            }).collect(),
-                                        Err(e) => {
-                                            return Err(format!(
-                                                "Can't read env_file {}: {:?}",
-                                                file, e
-                                            ))
+                                let mut env = ap
+                                    .env_file
+                                    .as_ref()
+                                    .map_or_else(|| Ok(HashMap::new()), |f| read_env_file(&f))?;
+
+                                if let Some(ref vars) = ap.env {
+                                    vars.pass.iter().for_each(|(old, new)| {
+                                        if let Ok(value) = env::var(old) {
+                                            env.insert(new.to_owned(), value.to_owned());
                                         }
-                                    },
-                                    None => HashMap::new(),
-                                };
-                                env.extend(ap.env.clone());
+                                    });
+                                    vars.new.iter().for_each(|(k, v)| {
+                                        env.insert(k.to_owned(), v.to_owned());
+                                    });
+                                }
 
                                 let stderr = match ap.stderr.as_ref() {
                                     None => None,
@@ -299,6 +299,21 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
             })?;
 
     Ok(riffol)
+}
+
+fn read_env_file(filename: &str) -> Result<HashMap<String, String>, String> {
+    fs::read_to_string(filename)
+        .map_err(|e| format!("Cant't read env_file {}: {:?}", filename, e))
+        .map(|s| {
+            s.lines()
+                .map(|v| {
+                    let kv = v.splitn(2, '=').collect::<Vec<&str>>();
+                    match kv.len() {
+                        1 => (kv[0].to_owned(), "".to_owned()),
+                        _ => (kv[0].to_owned(), kv[1].to_owned()),
+                    }
+                }).collect()
+        })
 }
 
 fn mk_interval_healthcheck(
