@@ -125,8 +125,12 @@ impl Application {
         self.pidfile.as_ref().and_then(|pidfile| {
             fs::read_to_string(pidfile)
                 .map_err(|e| format!("{:?}", e))
-                .and_then(|s| s.parse::<u32>().map_err(|e| format!("{:?}", e)))
-                .map_err(|e| {
+                .and_then(|s| {
+                    s.lines().next().map_or_else(
+                        || Err("Empty file".to_owned()),
+                        |s| s.parse::<u32>().map_err(|e| format!("{:?}", e)),
+                    )
+                }).map_err(|e| {
                     warn!("Couldn't read pidfile ({}): {}", pidfile, e);
                 }).ok()
         })
@@ -134,5 +138,4 @@ impl Application {
 }
 
 #[cfg(test)]
-mod tests {
-}
+mod tests {}
