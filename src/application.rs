@@ -126,7 +126,7 @@ impl Application {
         }
 
         let limits = self.limits.clone();
-
+        println!("{:?}", self.env);
         Command::new(&self.exec)
             .current_dir(&self.dir)
             .env_clear()
