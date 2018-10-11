@@ -216,6 +216,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                 if let Some(ref vars) = ap.env {
                                     vars.pass.iter().for_each(|(old, new)| {
                                         if let Ok(value) = env::var(old) {
+                                            println!("{} {} {}", old, new, value);
                                             env.insert(new.to_owned(), value.to_owned());
                                         }
                                     });
