@@ -1,10 +1,12 @@
 FROM centos:latest
 
-RUN yum install -y epel-release && yum install -y openvpn sysvinit-tools
-COPY riffol nereond /usr/bin/
-COPY libucl.so /usr/lib
-RUN ln -s /lib/libucl.so /lib/libucl.so.5; ldconfig
+RUN yum install -y epel-release \
+ && yum install -y curl gcc libc6-dev openvpn \
+ && curl https://sh.rustup.rs -sSf | sh -s -- -y
+
+RUN /root/.cargo/bin/cargo install nereond riffol
+
 COPY riffol.conf /etc/
 COPY openvpn-init.sh /riffol/
 
-CMD riffol -f /etc/riffol.conf
+ENTRYPOINT ["/root/.cargo/bin/riffol",  "-f",  "/etc/riffol.conf"]

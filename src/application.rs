@@ -23,38 +23,29 @@
 
 use limit::{setlimit, RLimit};
 use std::collections::HashMap;
+use std::fs;
 use std::io;
 use std::os::unix::io::IntoRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::str::FromStr;
 use stream;
 
 #[derive(Debug, PartialEq)]
-pub enum AppAction {
-    Restart,
-}
-
-impl FromStr for AppAction {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "restart" => Ok(AppAction::Restart),
-            _ => Err(format!("No such AppAction \"{}\"", s)),
-        }
-    }
+pub enum Mode {
+    Simple,
+    Forking,
+    OneShot,
 }
 
 #[derive(Debug)]
 pub struct Application {
-    pub exec: String,
+    pub mode: Mode,
     pub dir: String,
+    pub pidfile: Option<String>,
     pub env: HashMap<String, String>,
-    pub start: String,
-    pub stop: String,
-    pub restart: String,
+    pub start: Vec<String>,
+    pub stop: Vec<String>,
     pub healthchecks: Vec<String>,
-    pub healthcheckfail: AppAction,
     pub limits: Vec<RLimit>,
     pub stdout: Option<stream::Stream>,
     pub stderr: Option<stream::Stream>,
@@ -72,6 +63,7 @@ pub enum AppState {
     },
     Running {
         stop: Option<bool>,
+        pid: Option<u32>,
     },
     Stopping {
         pid: u32,
@@ -104,7 +96,7 @@ impl Application {
         })
     }
 
-    fn start_process(&self, arg: &str) -> io::Result<Child> {
+    fn start_process(&self, args: &[String]) -> io::Result<Child> {
         fn stdio(stream: &Option<stream::Stream>) -> Stdio {
             stream
                 .as_ref()
@@ -116,7 +108,7 @@ impl Application {
 
         let limits = self.limits.clone();
 
-        Command::new(&self.exec)
+        Command::new(&args[0])
             .current_dir(&self.dir)
             .env_clear()
             .envs(self.env.iter())
@@ -125,17 +117,25 @@ impl Application {
                 Ok(())
             }).stdout(stdio(&self.stdout))
             .stderr(stdio(&self.stderr))
-            .arg(arg)
+            .args(&args[1..])
             .spawn()
+    }
+
+    pub fn read_pidfile(&self) -> Option<u32> {
+        self.pidfile.as_ref().and_then(|pidfile| {
+            fs::read_to_string(pidfile)
+                .map_err(|e| format!("{:?}", e))
+                .and_then(|s| {
+                    s.lines().next().map_or_else(
+                        || Err("Empty file".to_owned()),
+                        |s| s.parse::<u32>().map_err(|e| format!("{:?}", e)),
+                    )
+                }).map_err(|e| {
+                    warn!("Couldn't read pidfile ({}): {}", pidfile, e);
+                }).ok()
+        })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn test_app_action() {
-        use super::AppAction;
-        assert_eq!("restart".parse(), Ok(AppAction::Restart));
-        assert!("restrt".parse::<AppAction>().is_err());
-    }
-}
+mod tests {}

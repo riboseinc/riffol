@@ -115,7 +115,7 @@ impl Handler {
     /// write to `Stream`
     pub fn add_stream(&self, fd: RawFd, stream: Stream) {
         // send message to handler thread
-        println!("Adding fd {}", fd);
+        debug!("Adding stream for fd {}", fd);
         self.channel.send(Message::Add(fd, stream))
     }
 }

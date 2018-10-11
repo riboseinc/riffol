@@ -21,17 +21,17 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use application::{self, AppAction, AppState};
+use application::{self, AppState, Mode};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
 use nereon::{self, FromValue, Value};
 use std::collections::HashMap;
-use std::fs;
 use std::iter::Iterator;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
+use std::{env, fs};
 use stream;
 use syslog;
 
@@ -62,16 +62,21 @@ struct AppGroup {
 }
 
 #[derive(FromValue)]
+struct Environment {
+    pass: HashMap<String, String>,
+    new: HashMap<String, String>,
+}
+
+#[derive(FromValue)]
 struct Application {
-    exec: String,
+    mode: Option<String>,
     dir: Option<String>,
-    env: HashMap<String, String>,
+    pidfile: Option<String>,
+    env: Option<Environment>,
     env_file: Option<String>,
-    start: Option<String>,
-    stop: Option<String>,
-    restart: Option<String>,
+    start: Vec<String>,
+    stop: Vec<String>,
     healthchecks: Vec<String>,
-    healthcheckfail: Option<String>,
     limits: Vec<String>,
     stdout: Option<Stream>,
     stderr: Option<Stream>,
@@ -185,32 +190,36 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                     for ap_name in &group.applications {
                         match config.application.get(ap_name) {
                             Some(ap) => {
+                                let mode = ap.mode.as_ref().map_or_else(
+                                    || Ok(Mode::Simple),
+                                    |s| match s.as_ref() {
+                                        "simple" => Ok(Mode::Simple),
+                                        "forking" => Ok(Mode::Forking),
+                                        "oneshot" => Ok(Mode::OneShot),
+                                        _ => Err(format!("Invalid application mode ({})", s)),
+                                    },
+                                )?;
+
                                 let healthchecks = ap.healthchecks.clone();
                                 let limits = match get_limits(&config.limits, &ap.limits) {
                                     Ok(ls) => ls,
                                     Err(e) => return Err(e),
                                 };
-                                let mut env = match ap.env_file {
-                                    Some(ref file) => match fs::read_to_string(file) {
-                                        Ok(s) => s
-                                            .lines()
-                                            .map(|v| {
-                                                let kv = v.splitn(2, '=').collect::<Vec<&str>>();
-                                                match kv.len() {
-                                                    1 => (kv[0].to_owned(), "".to_owned()),
-                                                    _ => (kv[0].to_owned(), kv[1].to_owned()),
-                                                }
-                                            }).collect(),
-                                        Err(e) => {
-                                            return Err(format!(
-                                                "Can't read env_file {}: {:?}",
-                                                file, e
-                                            ))
+                                let mut env = ap
+                                    .env_file
+                                    .as_ref()
+                                    .map_or_else(|| Ok(HashMap::new()), |f| read_env_file(&f))?;
+
+                                if let Some(ref vars) = ap.env {
+                                    vars.pass.iter().for_each(|(old, new)| {
+                                        if let Ok(value) = env::var(old) {
+                                            env.insert(new.to_owned(), value.to_owned());
                                         }
-                                    },
-                                    None => HashMap::new(),
-                                };
-                                env.extend(ap.env.clone());
+                                    });
+                                    vars.new.iter().for_each(|(k, v)| {
+                                        env.insert(k.to_owned(), v.to_owned());
+                                    });
+                                }
 
                                 let stderr = match ap.stderr.as_ref() {
                                     None => None,
@@ -231,33 +240,13 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                 riffol.applications.insert(
                                     ap_name.to_owned(),
                                     application::Application {
-                                        exec: ap.exec.clone(),
+                                        mode,
                                         dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
+                                        pidfile: ap.pidfile.clone(),
                                         env,
-                                        start: ap
-                                            .start
-                                            .as_ref()
-                                            .map(|s| s.as_str())
-                                            .unwrap_or("start")
-                                            .to_owned(),
-                                        stop: ap
-                                            .stop
-                                            .as_ref()
-                                            .map(|s| s.as_str())
-                                            .unwrap_or("stop")
-                                            .to_owned(),
-                                        restart: ap
-                                            .restart
-                                            .as_ref()
-                                            .map(|s| s.as_str())
-                                            .unwrap_or("restart")
-                                            .to_owned(),
+                                        start: ap.start.clone(),
+                                        stop: ap.stop.clone(),
                                         healthchecks,
-                                        healthcheckfail: ap
-                                            .healthcheckfail
-                                            .as_ref()
-                                            .and_then(|a| a.parse().ok())
-                                            .unwrap_or(AppAction::Restart),
                                         limits,
                                         stdout,
                                         stderr,
@@ -299,6 +288,21 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
             })?;
 
     Ok(riffol)
+}
+
+fn read_env_file(filename: &str) -> Result<HashMap<String, String>, String> {
+    fs::read_to_string(filename)
+        .map_err(|e| format!("Cant't read env_file {}: {:?}", filename, e))
+        .map(|s| {
+            s.lines()
+                .map(|v| {
+                    let kv = v.splitn(2, '=').collect::<Vec<&str>>();
+                    match kv.len() {
+                        1 => (kv[0].to_owned(), "".to_owned()),
+                        _ => (kv[0].to_owned(), kv[1].to_owned()),
+                    }
+                }).collect()
+        })
 }
 
 fn mk_interval_healthcheck(
