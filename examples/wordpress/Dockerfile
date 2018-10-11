@@ -17,8 +17,9 @@ RUN a2enmod rewrite && a2enmod vhost_alias && a2dissite 000-default && a2ensite 
 COPY wordpress.php /etc/wordpress/config-default.php
 COPY wordpress.sql /tmp
 COPY initialise-mysql.sh /tmp
-COPY riffol.conf /etc
 
 RUN /root/.cargo/bin/cargo install riffol
+
+COPY riffol.conf /etc
 
 ENTRYPOINT ["/root/.cargo/bin/riffol",  "-f",  "/etc/riffol.conf"]
