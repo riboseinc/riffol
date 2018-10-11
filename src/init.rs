@@ -70,7 +70,7 @@ impl Init {
                 self.handle_signal(signal);
             }
             if let Some((group, message)) = fail {
-                self.handle_fail(&group, &message)
+                self.handle_healthcheck_fail(&group, &message)
             }
         }
     }
@@ -90,26 +90,41 @@ impl Init {
                     AppState::Stopping { pid: p, .. } if p == pid => true,
                     _ => false,
                 }) {
+                debug!("Application ({}) process exited with code {}", id, status);
                 match app.state {
-                    AppState::Starting { stop, .. } => {
-                        if let Some(restart) = stop {
-                            app.stop(restart).ok();
-                        } else {
-                            app.state = AppState::Running {
-                                stop: None,
-                                pid: None,
-                            };
+                    AppState::Starting { stop, .. } => match app.mode {
+                        Mode::OneShot | Mode::Forking if status != 0 => {
+                            warn!("Application {} failed to start. Exit code {}", id, status);
+                            app.state = AppState::Idle;
+                        }
+                        Mode::OneShot => app.state = AppState::Stopped,
+                        Mode::Forking => {
+                            if let Some(restart) = stop {
+                                app.stop(restart).ok();
+                            } else {
+                                app.state = AppState::Running {
+                                    stop: None,
+                                    pid: app.read_pidfile(),
+                                };
+                            }
+                        }
+                        _ => unreachable!(),
+                    },
+                    AppState::Running { stop, .. } => {
+                        warn!(
+                            "Application {} stopped unexpectedly. Exit code {}",
+                            id, status
+                        );
+                        match stop {
+                            Some(true) => app.state = AppState::Idle,
+                            Some(false) => app.state = AppState::Stopped,
+                            None => {
+                                // unexpected termination, restart dependents
+                                app.state = AppState::Idle;
+                                failed_id = Some(id.clone());
+                            }
                         }
                     }
-                    AppState::Running { stop, .. } => match stop {
-                        Some(true) => app.state = AppState::Idle,
-                        Some(false) => app.state = AppState::Stopped,
-                        None => {
-                            // unexpected termination, restart dependents
-                            app.state = AppState::Idle;
-                            failed_id = Some(id.clone());
-                        }
-                    },
                     AppState::Stopping { restart: true, .. } => app.state = AppState::Idle,
                     AppState::Stopping { restart: false, .. } => app.state = AppState::Stopped,
                     _ => unreachable!(),
@@ -145,7 +160,7 @@ impl Init {
         }
     }
 
-    fn handle_fail(&mut self, group: &str, _message: &str) {
+    fn handle_healthcheck_fail(&mut self, group: &str, _message: &str) {
         self.applications
             .iter()
             .filter(|(_, app)| app.healthchecks.iter().any(|h| *h == group))
@@ -224,12 +239,13 @@ impl Init {
             .values()
             .any(|a| a.state == AppState::Idle)
         {
-            // get list of running apps
+            // get list of running or completed OneShot apps
             let running = self
                 .applications
                 .iter()
                 .filter(|(_, ap)| match ap.state {
                     AppState::Running { stop: None, .. } => true,
+                    AppState::Stopped if ap.mode == Mode::OneShot => true,
                     _ => false,
                 }).map(|(k, _)| k.to_owned())
                 .collect::<Vec<_>>();

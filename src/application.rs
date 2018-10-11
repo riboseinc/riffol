@@ -23,6 +23,7 @@
 
 use limit::{setlimit, RLimit};
 use std::collections::HashMap;
+use std::fs;
 use std::io;
 use std::os::unix::io::IntoRawFd;
 use std::os::unix::process::CommandExt;
@@ -57,6 +58,7 @@ pub struct Application {
     pub mode: Mode,
     pub exec: String,
     pub dir: String,
+    pub pidfile: Option<String>,
     pub env: HashMap<String, String>,
     pub start: String,
     pub stop: String,
@@ -136,6 +138,17 @@ impl Application {
             .stderr(stdio(&self.stderr))
             .arg(arg)
             .spawn()
+    }
+
+    pub fn read_pidfile(&self) -> Option<u32> {
+        self.pidfile.as_ref().and_then(|pidfile| {
+            fs::read_to_string(pidfile)
+                .map_err(|e| format!("{:?}", e))
+                .and_then(|s| s.parse::<u32>().map_err(|e| format!("{:?}", e)))
+                .map_err(|e| {
+                    warn!("Couldn't read pidfile ({}): {}", pidfile, e);
+                }).ok()
+        })
     }
 }
 

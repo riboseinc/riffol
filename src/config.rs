@@ -72,6 +72,7 @@ struct Application {
     mode: Option<String>,
     exec: String,
     dir: Option<String>,
+    pidfile: Option<String>,
     env: Option<Environment>,
     env_file: Option<String>,
     start: Option<String>,
@@ -245,6 +246,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                         mode,
                                         exec: ap.exec.clone(),
                                         dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
+                                        pidfile: ap.pidfile.clone(),
                                         env,
                                         start: ap
                                             .start
