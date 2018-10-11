@@ -21,7 +21,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use application::{self, AppAction, AppState, Mode};
+use application::{self, AppState, Mode};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
 use nereon::{self, FromValue, Value};
@@ -70,16 +70,13 @@ struct Environment {
 #[derive(FromValue)]
 struct Application {
     mode: Option<String>,
-    exec: String,
     dir: Option<String>,
     pidfile: Option<String>,
     env: Option<Environment>,
     env_file: Option<String>,
-    start: Option<String>,
-    stop: Option<String>,
-    restart: Option<String>,
+    start: Vec<String>,
+    stop: Vec<String>,
     healthchecks: Vec<String>,
-    healthcheckfail: Option<String>,
     limits: Vec<String>,
     stdout: Option<Stream>,
     stderr: Option<Stream>,
@@ -244,34 +241,12 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     ap_name.to_owned(),
                                     application::Application {
                                         mode,
-                                        exec: ap.exec.clone(),
                                         dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
                                         pidfile: ap.pidfile.clone(),
                                         env,
-                                        start: ap
-                                            .start
-                                            .as_ref()
-                                            .map(|s| s.as_str())
-                                            .unwrap_or("start")
-                                            .to_owned(),
-                                        stop: ap
-                                            .stop
-                                            .as_ref()
-                                            .map(|s| s.as_str())
-                                            .unwrap_or("stop")
-                                            .to_owned(),
-                                        restart: ap
-                                            .restart
-                                            .as_ref()
-                                            .map(|s| s.as_str())
-                                            .unwrap_or("restart")
-                                            .to_owned(),
+                                        start: ap.start.clone(),
+                                        stop: ap.stop.clone(),
                                         healthchecks,
-                                        healthcheckfail: ap
-                                            .healthcheckfail
-                                            .as_ref()
-                                            .and_then(|a| a.parse().ok())
-                                            .unwrap_or(AppAction::Restart),
                                         limits,
                                         stdout,
                                         stderr,

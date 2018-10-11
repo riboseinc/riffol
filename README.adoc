@@ -35,27 +35,6 @@ runtime configuration.
 
 Riffol is implemented in Rust.
 
-== Installation
-
-[source,shell]
-----
-git clone https://github.com/vstakhov/libucl
-cd libucl
-./autogen.sh
-./configure
-make
-sudo make install
-sudo ldconfig
-----
-
-`pidof` is part of `sysvinit-tools` which can be installed via the
-package manager on most systems.
-
-=== Ready-made Executables
-
-Riffol binaries can be downloaded directly from
-http://github.com/riboseinc/riffol/releases[GitHub].
-
 === Building From Source
 
 Make sure there is a Rust environment installed. Otherwise follow the
@@ -105,9 +84,6 @@ init web {
 
 === Application Group
 
-The entered entries in the `applications[]` list is also the order in
-which applications should be started.
-
 [source]
 ----
 application_group name {
@@ -140,7 +116,11 @@ application_group webstack {
 [source]
 ----
 application "name" {
-  exec executable_path
+  mode application_mode
+  requires [other applications]
+  start [executable start args]
+  stop [executable stop args]
+  pidfile file
   dir working_directory
   env {
     new var1 value
@@ -148,9 +128,6 @@ application "name" {
     pass oldname newname
   }
   env_file env_filename
-  start start_arg
-  stop stop_arg
-  restart restart_arg
   stdout stream_destination
   stderr stream_destination
   uid int
@@ -158,9 +135,10 @@ application "name" {
   healthchecks [
     "healthcheck.name"
   ]
-  healthcheckfail fail_action
 }
 ----
+
+`application_mode` can be one of `oneshot`, `simple` or `forking`
 
 Applications are started with a clean environment. Environment
 variables can be added with `env` and `env_file` fields.
