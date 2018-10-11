@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "riffol"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.43 (registry+https://github.com/rust-lang/crates.io-index)",
