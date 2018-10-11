@@ -1,7 +1,7 @@
 [package]
 name = "riffol"
 description = "Riffol is a supervising process that can run as a traditional daemon on Unix-like systems or as an `init` system for containers"
-version = "0.1.2"
+version = "0.2.0"
 repository = "https://github.com/riboseinc/riffol"
 authors = ["John Hedges <john@drystone.co.uk>", "Ribose Inc. <open.source@ribose.com>"]
 license = "BSD-2-Clause"
