@@ -21,7 +21,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use application::{AppState, Application};
+use application::{AppState, Application, Mode};
 use crossbeam_channel as cc;
 use libc;
 use signal_hook;
@@ -80,23 +80,43 @@ impl Init {
             let mut status: libc::c_int = 0;
             let pid = unsafe { libc::wait(&mut status) } as u32;
             debug!("SIGCHLD received {} {}", pid, status);
-            if let Some(app) = self.applications.values_mut().find(|app| match app.state {
-                AppState::Starting { pid: p, .. } if p == pid => true,
-                AppState::Stopping { pid: p, .. } if p == pid => true,
-                _ => false,
-            }) {
+            let mut failed_id = None;
+            if let Some((id, app)) = self
+                .applications
+                .iter_mut()
+                .find(|(_, app)| match app.state {
+                    AppState::Starting { pid: p, .. } if p == pid => true,
+                    AppState::Running { pid: p, .. } if p == Some(pid) => true,
+                    AppState::Stopping { pid: p, .. } if p == pid => true,
+                    _ => false,
+                }) {
                 match app.state {
                     AppState::Starting { stop, .. } => {
                         if let Some(restart) = stop {
                             app.stop(restart).ok();
                         } else {
-                            app.state = AppState::Running { stop: None };
+                            app.state = AppState::Running {
+                                stop: None,
+                                pid: None,
+                            };
                         }
                     }
+                    AppState::Running { stop, .. } => match stop {
+                        Some(true) => app.state = AppState::Idle,
+                        Some(false) => app.state = AppState::Stopped,
+                        None => {
+                            // unexpected termination, restart dependents
+                            app.state = AppState::Idle;
+                            failed_id = Some(id.clone());
+                        }
+                    },
                     AppState::Stopping { restart: true, .. } => app.state = AppState::Idle,
                     AppState::Stopping { restart: false, .. } => app.state = AppState::Stopped,
                     _ => unreachable!(),
                 }
+            }
+            if let Some(id) = failed_id {
+                self.fail_dependents(&id);
             }
         } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
             debug!("Received termination signal ({})", sig);
@@ -126,27 +146,55 @@ impl Init {
     }
 
     fn handle_fail(&mut self, group: &str, _message: &str) {
-        let ids = self
+        self.applications
+            .iter()
+            .filter(|(_, app)| app.healthchecks.iter().any(|h| *h == group))
+            .map(|(id, _)| id.to_owned())
+            .collect::<Vec<_>>()
+            .iter()
+            .for_each(|id| {
+                self.fail_app(id);
+                self.fail_dependents(id);
+            });
+    }
+
+    fn fail_app(&mut self, id: &str) {
+        if let Some(app) = self.applications.get_mut(id) {
+            match app.state {
+                AppState::Starting {
+                    pid,
+                    fds,
+                    stop: None,
+                } => {
+                    app.state = AppState::Starting {
+                        pid,
+                        fds,
+                        stop: Some(true),
+                    }
+                }
+                AppState::Running { stop: None, pid } => {
+                    app.state = AppState::Running {
+                        stop: Some(true),
+                        pid,
+                    }
+                }
+                _ => (),
+            };
+        }
+    }
+
+    fn fail_dependents(&mut self, id: &str) {
+        let mut failed = vec![id.to_owned()];
+        let mut remaining = self
             .applications
             .keys()
+            .filter(|k| k.as_str() != id)
             .map(|k| k.to_owned())
             .collect::<Vec<_>>();
 
-        // find all apps subscribed to the failed healthcheck group
-        // ignore apps that aren't running
-        let (mut failed, mut ok) = ids.into_iter().partition::<Vec<_>, _>(|id| {
-            self.applications
-                .get(id)
-                .filter(|a| match a.state {
-                    AppState::Running { stop: None } => true,
-                    _ => false,
-                }).and_then(|a| a.healthchecks.iter().find(|h| *h == group))
-                .is_some()
-        });
-
-        // add all dependents of failed apps
+        // add all dependents of failed app
         loop {
-            let (mut depends, nodepends) = ok.into_iter().partition::<Vec<_>, _>(|id| {
+            let (mut depends, others) = remaining.into_iter().partition::<Vec<_>, _>(|id| {
                 self.applications
                     .get(id)
                     .map(|app| app.depends.iter().any(|a| failed.iter().any(|b| a == b)))
@@ -156,31 +204,11 @@ impl Init {
                 break;
             }
             failed.append(&mut depends);
-            ok = nodepends;
+            remaining = others;
         }
 
         // mark all as Failed
-        failed.iter().for_each(|id| {
-            if let Some(app) = self.applications.get_mut(id) {
-                match app.state {
-                    AppState::Starting {
-                        pid,
-                        fds,
-                        stop: None,
-                    } => {
-                        app.state = AppState::Starting {
-                            pid,
-                            fds,
-                            stop: Some(true),
-                        }
-                    }
-                    AppState::Running { stop: None } => {
-                        app.state = AppState::Running { stop: Some(true) }
-                    }
-                    _ => (),
-                };
-            }
-        });
+        failed.iter().for_each(|id| self.fail_app(id));
     }
 
     fn all_stopped(&self) -> bool {
@@ -200,8 +228,10 @@ impl Init {
             let running = self
                 .applications
                 .iter()
-                .filter(|(_, a)| a.state == AppState::Running { stop: None })
-                .map(|(k, _)| k.to_owned())
+                .filter(|(_, ap)| match ap.state {
+                    AppState::Running { stop: None, .. } => true,
+                    _ => false,
+                }).map(|(k, _)| k.to_owned())
                 .collect::<Vec<_>>();
 
             let mut streams = Vec::new();
@@ -212,18 +242,23 @@ impl Init {
                     if ap.depends.iter().all(|d| running.iter().any(|r| d == r)) {
                         ap.start().ok();
                         if let AppState::Starting {
-                            fds: (_, Some(stdout), _),
+                            fds: (_, stdout, stderr),
+                            pid,
                             ..
                         } = ap.state
                         {
-                            streams.push((stdout, ap.stdout.clone()));
-                        }
-                        if let AppState::Starting {
-                            fds: (_, _, Some(stderr)),
-                            ..
-                        } = ap.state
-                        {
-                            streams.push((stderr, ap.stderr.clone()));
+                            if let Some(stdout) = stdout {
+                                streams.push((stdout, ap.stdout.clone()));
+                            }
+                            if let Some(stderr) = stderr {
+                                streams.push((stderr, ap.stderr.clone()));
+                            }
+                            if ap.mode == Mode::Simple {
+                                ap.state = AppState::Running {
+                                    stop: None,
+                                    pid: Some(pid),
+                                };
+                            }
                         }
                     }
                 });
@@ -239,7 +274,7 @@ impl Init {
             .applications
             .iter()
             .filter(|(_, app)| match app.state {
-                AppState::Running { stop: Some(_) } => true,
+                AppState::Running { stop: Some(_), .. } => true,
                 _ => false,
             }).map(|(k, _)| k.to_owned())
             .collect::<Vec<_>>();
@@ -259,6 +294,7 @@ impl Init {
             self.applications.get_mut(&id).map(|app| match app.state {
                 AppState::Running {
                     stop: Some(restart),
+                    ..
                 } => app.stop(restart),
                 _ => unreachable!(),
             });

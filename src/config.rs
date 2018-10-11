@@ -21,7 +21,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use application::{self, AppAction, AppState};
+use application::{self, AppAction, AppState, Mode};
 use health::{DfCheck, HealthCheck, IntervalHealthCheck, ProcCheck, TcpCheck};
 use limit::{Limit, RLimit};
 use nereon::{self, FromValue, Value};
@@ -69,6 +69,7 @@ struct Environment {
 
 #[derive(FromValue)]
 struct Application {
+    mode: Option<String>,
     exec: String,
     dir: Option<String>,
     env: Option<Environment>,
@@ -191,6 +192,16 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                     for ap_name in &group.applications {
                         match config.application.get(ap_name) {
                             Some(ap) => {
+                                let mode = ap.mode.as_ref().map_or_else(
+                                    || Ok(Mode::Simple),
+                                    |s| match s.as_ref() {
+                                        "simple" => Ok(Mode::Simple),
+                                        "forking" => Ok(Mode::Forking),
+                                        "oneshot" => Ok(Mode::OneShot),
+                                        _ => Err(format!("Invalid application mode ({})", s)),
+                                    },
+                                )?;
+
                                 let healthchecks = ap.healthchecks.clone();
                                 let limits = match get_limits(&config.limits, &ap.limits) {
                                     Ok(ls) => ls,
@@ -231,6 +242,7 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                 riffol.applications.insert(
                                     ap_name.to_owned(),
                                     application::Application {
+                                        mode,
                                         exec: ap.exec.clone(),
                                         dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
                                         env,

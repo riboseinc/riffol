@@ -45,8 +45,16 @@ impl FromStr for AppAction {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Mode {
+    Simple,
+    Forking,
+    OneShot,
+}
+
 #[derive(Debug)]
 pub struct Application {
+    pub mode: Mode,
     pub exec: String,
     pub dir: String,
     pub env: HashMap<String, String>,
@@ -72,6 +80,7 @@ pub enum AppState {
     },
     Running {
         stop: Option<bool>,
+        pid: Option<u32>,
     },
     Stopping {
         pid: u32,
