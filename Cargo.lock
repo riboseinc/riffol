@@ -283,19 +283,19 @@ dependencies = [
 
 [[package]]
 name = "nereon"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "clap 2.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "nereon_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nereon_derive 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "pest 2.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pest_derive 2.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "nereon_derive"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "proc-macro2 0.4.20 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -473,8 +473,8 @@ dependencies = [
  "libc 0.2.43 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.6.16 (registry+https://github.com/rust-lang/crates.io-index)",
- "nereon 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "nereon_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nereon 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nereon_derive 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "nix 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "signal-hook 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -768,8 +768,8 @@ dependencies = [
 "checksum memoffset 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0f9dc261e2b62d7a622bf416ea3c5245cdd5d9a7fcc428c0d06804dfce1775b3"
 "checksum mio 0.6.16 (registry+https://github.com/rust-lang/crates.io-index)" = "71646331f2619b1026cc302f87a2b8b648d5c6dd6937846a16cc8ce0f347f432"
 "checksum miow 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "8c1f2f3b1cf331de6896aabf6e9d55dca90356cc9960cca7eaaf408a355ae919"
-"checksum nereon 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f32b834bf45e05e1597d8ad00996f4fbb635c00c42b95b4f8720647093d9dd6b"
-"checksum nereon_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8d6de20b4b83a9b628ce416f01a04e06c7235cee7ea5e589b6ead741d6842364"
+"checksum nereon 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "62768d8312c61ba65cafdc47f30b55492b01e7777e8607215e5b91ed2d64f872"
+"checksum nereon_derive 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "58034b763474813216f2248f3bace22bd1b8cf5e887b31a8719d0b808176b767"
 "checksum net2 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)" = "42550d9fb7b6684a6d404d9fa7250c2eb2646df731d1c06afc06dcee9e1bcf88"
 "checksum nix 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d37e713a259ff641624b6cb20e3b12b2952313ba36b6823c0f16e6cfd9e5de17"
 "checksum nodrop 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)" = "9a2228dca57108069a5262f2ed8bd2e82496d2e074a06d1ccc7ce1687b6ae0a2"
