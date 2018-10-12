@@ -41,48 +41,33 @@ impl Init {
         sig_recv: cc::Receiver<i32>,
         fail_recv: cc::Receiver<(String, String)>,
     ) {
-        Self { applications }.run_loop(sig_recv, fail_recv);
-    }
-
-    fn run_loop(&mut self, sig_recv: cc::Receiver<i32>, fail_recv: cc::Receiver<(String, String)>) {
+        let mut apps = Self { applications };
         let mut stream_handler = stream::Handler::new();
         let mut timers = Timers::<(String, u32)>::new();
-        loop {
-            if self.all_stopped() {
-                break;
+
+        while !apps.all_stopped() {
+            apps.start_idle_applications(&mut stream_handler);
+            apps.stop_stopped_applications(&mut timers);
+
+            let timer = timers.get_timeout().map(cc::after);
+            let mut select = cc::Select::new()
+                .recv(&sig_recv, |s| s.map(Event::Signal))
+                .recv(&fail_recv, |f| f.map(Event::Fail));
+            if let Some(timer) = timer.as_ref() {
+                select = select.recv(timer, |t| t.map(|_| Event::Timer));
             }
 
-            self.start_idle_applications(&mut stream_handler);
-            self.stop_stopped_applications(&mut timers);
-
-            let mut signal = None;
-            let mut fail: Option<(String, String)> = None;
-            let mut timeout = None;
-
-            if let Some(duration) = timers.get_timeout() {
-                let after = cc::after(duration);
-                cc::Select::new()
-                    .recv(&sig_recv, |s| signal = s)
-                    .recv(&fail_recv, |f| fail = f)
-                    .recv(&after, |t| timeout = t)
-                    .wait();
-            } else {
-                cc::Select::new()
-                    .recv(&sig_recv, |s| signal = s)
-                    .recv(&fail_recv, |f| fail = f)
-                    .wait();
+            match select.wait() {
+                Some(Event::Signal(signal)) => apps.handle_signal(signal),
+                Some(Event::Fail((group, msg))) => apps.handle_healthcheck_fail(&group, &msg),
+                Some(Event::Timer) => apps.handle_timeout(&mut timers),
+                None => unreachable!(),
             }
 
-            if let Some(signal) = signal {
-                self.handle_signal(signal);
-            }
-
-            if let Some((group, message)) = fail {
-                self.handle_healthcheck_fail(&group, &message);
-            }
-
-            if let Some(_) = timeout {
-                self.handle_timeout(&mut timers);
+            enum Event {
+                Signal(i32),
+                Fail((String, String)),
+                Timer,
             }
         }
     }
@@ -107,12 +92,18 @@ impl Init {
                     AppState::Starting { stop, .. } => match app.mode {
                         Mode::OneShot | Mode::Forking if status != 0 => {
                             warn!("Application {} failed to start. Exit code {}", id, status);
-                            app.state = AppState::Idle;
+                            if let Some(false) = stop {
+                                app.state = AppState::Stopped;
+                            } else {
+                                app.state = AppState::Idle;
+                            }
                         }
                         Mode::OneShot => app.state = AppState::Stopped,
                         Mode::Forking => {
                             if let Some(restart) = stop {
-                                app.stop(restart).ok();
+                                if let Err(e) = app.stop(restart) {
+                                    warn!("Application {} stop failed: {}", id, e);
+                                }
                             } else {
                                 app.state = AppState::Running {
                                     stop: None,
@@ -148,8 +139,8 @@ impl Init {
         } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
             debug!("Received termination signal ({})", sig);
             self.applications
-                .values_mut()
-                .for_each(|app| match app.state {
+                .iter_mut()
+                .for_each(|(id, app)| match app.state {
                     AppState::Idle => app.state = AppState::Stopped,
                     AppState::Starting { pid, fds, .. } => {
                         app.state = AppState::Starting {
@@ -159,7 +150,9 @@ impl Init {
                         }
                     }
                     AppState::Running { .. } => {
-                        app.stop(false).ok();
+                        if let Err(e) = app.stop(false) {
+                            warn!("Application {} stop failed: {}", id, e);
+                        }
                     }
                     AppState::Stopping { pid, .. } => {
                         app.state = AppState::Stopping {
