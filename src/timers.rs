@@ -21,43 +21,43 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-extern crate crossbeam_channel;
-extern crate libc;
-extern crate mio;
-extern crate nereon;
-extern crate nix;
-extern crate rand;
-extern crate signal_hook;
-extern crate slab;
-extern crate syslog;
+use std::time::{Duration, Instant};
 
-#[macro_use]
-extern crate nereon_derive;
+struct Timer<T> {
+    instant: Instant,
+    payload: T,
+}
 
-#[macro_use]
-extern crate log;
+pub struct Timers<T> {
+    timers: Vec<(Timer<T>)>,
+}
 
-mod application;
-mod config;
-mod distro;
-mod health;
-mod init;
-mod limit;
-mod signal;
-mod stream;
-mod timers;
+impl<T> Timers<T> {
+    pub fn new() -> Self {
+        Timers { timers: Vec::new() }
+    }
 
-pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) -> Result<(), String> {
-    let config::Riffol {
-        applications: apps,
-        dependencies: deps,
-        healthchecks: checks,
-    } = config::get_config(args)?;
+    pub fn add_timer(&mut self, duration: Duration, payload: T) {
+        self.timers.push(Timer {
+            instant: Instant::now() + duration,
+            payload,
+        });
+    }
 
-    distro::install_packages(&deps)?;
+    pub fn get_timeout(&self) -> Option<Duration> {
+        self.earliest()
+            .map(|Timer { instant, .. }| Instant::now() - *instant)
+    }
 
-    let sig_recv = signal::recv_signals();
-    let check_recv = health::recv_checks(&checks);
-    init::Init::run(apps, sig_recv, check_recv);
-    Ok(())
+    pub fn remove_earliest(&mut self) -> T {
+        let position = self
+            .earliest()
+            .and_then(|e| self.timers.iter().position(|t| t.instant == e.instant))
+            .expect("remove_earliest called when empty");
+        self.timers.swap_remove(position).payload
+    }
+
+    fn earliest(&self) -> Option<&Timer<T>> {
+        self.timers.iter().min_by(|a, b| a.instant.cmp(&b.instant))
+    }
 }

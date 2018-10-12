@@ -21,7 +21,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use libc;
 use limit::{setlimit, RLimit};
+use signal::signal;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -88,12 +90,20 @@ impl Application {
     }
 
     pub fn stop(&mut self, restart: bool) -> io::Result<()> {
-        self.start_process(&self.stop).map(|child| {
-            self.state = AppState::Stopping {
-                pid: child.id(),
-                restart,
+        if self.mode == Mode::Simple {
+            if let AppState::Running { pid: Some(pid), .. } = self.state {
+                signal(pid, libc::SIGTERM);
+                self.state = AppState::Stopping { pid, restart };
             }
-        })
+            Ok(())
+        } else {
+            self.start_process(&self.stop).map(|child| {
+                self.state = AppState::Stopping {
+                    pid: child.id(),
+                    restart,
+                }
+            })
+        }
     }
 
     fn start_process(&self, args: &[String]) -> io::Result<Child> {

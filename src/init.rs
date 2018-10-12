@@ -24,15 +24,15 @@
 use application::{AppState, Application, Mode};
 use crossbeam_channel as cc;
 use libc;
+use signal::signal;
 use signal_hook;
 use std::collections::HashMap;
+use std::time::Duration;
 use stream;
+use timers::Timers;
 
 pub struct Init {
     applications: HashMap<String, Application>,
-    stream_handler: stream::Handler,
-    sig_recv: cc::Receiver<i32>,
-    fail_recv: cc::Receiver<(String, String)>,
 }
 
 impl Init {
@@ -41,36 +41,48 @@ impl Init {
         sig_recv: cc::Receiver<i32>,
         fail_recv: cc::Receiver<(String, String)>,
     ) {
-        Self {
-            applications,
-            stream_handler: stream::Handler::new(),
-            sig_recv,
-            fail_recv,
-        }.run_loop();
+        Self { applications }.run_loop(sig_recv, fail_recv);
     }
 
-    fn run_loop(&mut self) {
+    fn run_loop(&mut self, sig_recv: cc::Receiver<i32>, fail_recv: cc::Receiver<(String, String)>) {
+        let mut stream_handler = stream::Handler::new();
+        let mut timers = Timers::<(String, u32)>::new();
         loop {
             if self.all_stopped() {
                 break;
             }
 
-            self.start_idle_applications();
-            self.stop_stopped_applications();
+            self.start_idle_applications(&mut stream_handler);
+            self.stop_stopped_applications(&mut timers);
 
             let mut signal = None;
             let mut fail: Option<(String, String)> = None;
+            let mut timeout = None;
 
-            cc::Select::new()
-                .recv(&self.sig_recv, |s| signal = s)
-                .recv(&self.fail_recv, |f| fail = f)
-                .wait();
+            if let Some(duration) = timers.get_timeout() {
+                let after = cc::after(duration);
+                cc::Select::new()
+                    .recv(&sig_recv, |s| signal = s)
+                    .recv(&fail_recv, |f| fail = f)
+                    .recv(&after, |t| timeout = t)
+                    .wait();
+            } else {
+                cc::Select::new()
+                    .recv(&sig_recv, |s| signal = s)
+                    .recv(&fail_recv, |f| fail = f)
+                    .wait();
+            }
 
             if let Some(signal) = signal {
                 self.handle_signal(signal);
             }
+
             if let Some((group, message)) = fail {
-                self.handle_healthcheck_fail(&group, &message)
+                self.handle_healthcheck_fail(&group, &message);
+            }
+
+            if let Some(_) = timeout {
+                self.handle_timeout(&mut timers);
             }
         }
     }
@@ -108,7 +120,7 @@ impl Init {
                                 };
                             }
                         }
-                        _ => unreachable!(),
+                        Mode::Simple => unreachable!(),
                     },
                     AppState::Running { stop, .. } => {
                         warn!(
@@ -127,7 +139,7 @@ impl Init {
                     }
                     AppState::Stopping { restart: true, .. } => app.state = AppState::Idle,
                     AppState::Stopping { restart: false, .. } => app.state = AppState::Stopped,
-                    _ => unreachable!(),
+                    AppState::Stopped | AppState::Idle => unreachable!(),
                 }
             }
             if let Some(id) = failed_id {
@@ -171,6 +183,17 @@ impl Init {
                 self.fail_app(id);
                 self.fail_dependents(id);
             });
+    }
+
+    fn handle_timeout(&mut self, timers: &mut Timers<(String, u32)>) {
+        let payload = timers.remove_earliest();
+        if let Some(app) = self.applications.get(&payload.0) {
+            if let AppState::Stopping { pid, .. } = app.state {
+                if pid == payload.1 {
+                    signal(pid, libc::SIGKILL);
+                }
+            }
+        }
     }
 
     fn fail_app(&mut self, id: &str) {
@@ -232,7 +255,7 @@ impl Init {
             .all(|a| a.state == AppState::Stopped)
     }
 
-    fn start_idle_applications(&mut self) {
+    fn start_idle_applications(&mut self, stream_handler: &mut stream::Handler) {
         // start idle apps
         if self
             .applications
@@ -243,48 +266,47 @@ impl Init {
             let running = self
                 .applications
                 .iter()
-                .filter(|(_, ap)| match ap.state {
+                .filter(|(_, app)| match app.state {
                     AppState::Running { stop: None, .. } => true,
-                    AppState::Stopped if ap.mode == Mode::OneShot => true,
+                    AppState::Stopped if app.mode == Mode::OneShot => true,
                     _ => false,
                 }).map(|(k, _)| k.to_owned())
                 .collect::<Vec<_>>();
 
-            let mut streams = Vec::new();
             self.applications
-                .values_mut()
-                .filter(|a| a.state == AppState::Idle)
-                .for_each(|ap| {
-                    if ap.depends.iter().all(|d| running.iter().any(|r| d == r)) {
-                        ap.start().ok();
-                        if let AppState::Starting {
-                            fds: (_, stdout, stderr),
-                            pid,
-                            ..
-                        } = ap.state
-                        {
-                            if let Some(stdout) = stdout {
-                                streams.push((stdout, ap.stdout.clone()));
-                            }
-                            if let Some(stderr) = stderr {
-                                streams.push((stderr, ap.stderr.clone()));
-                            }
-                            if ap.mode == Mode::Simple {
-                                ap.state = AppState::Running {
-                                    stop: None,
-                                    pid: Some(pid),
-                                };
+                .iter_mut()
+                .filter(|(_, app)| app.state == AppState::Idle)
+                .for_each(|(id, app)| {
+                    if app.depends.iter().all(|d| running.iter().any(|r| d == r)) {
+                        if let Err(e) = app.start() {
+                            warn!("Failed to stop application ({}): {}", id, e);
+                        } else {
+                            if let AppState::Starting {
+                                fds: (_, stdout, stderr),
+                                pid,
+                                ..
+                            } = app.state
+                            {
+                                if let Some(stdout) = stdout {
+                                    stream_handler.add_stream(stdout, app.stdout.clone().unwrap());
+                                }
+                                if let Some(stderr) = stderr {
+                                    stream_handler.add_stream(stderr, app.stderr.clone().unwrap());
+                                }
+                                if app.mode == Mode::Simple {
+                                    app.state = AppState::Running {
+                                        stop: None,
+                                        pid: Some(pid),
+                                    };
+                                }
                             }
                         }
                     }
                 });
-            streams
-                .drain(..)
-                .for_each(|(fd, s)| self.stream_handler.add_stream(fd, s.unwrap()));
         }
     }
 
-    fn stop_stopped_applications(&mut self) {
+    fn stop_stopped_applications(&mut self, timers: &mut Timers<(String, u32)>) {
         // get ids of running apps flagged with stop
         let ids = self
             .applications
@@ -305,13 +327,22 @@ impl Init {
                 })
             }).collect::<Vec<_>>();
 
-        // stop them
+        // stop them and set timers for simple apps
         ids.into_iter().for_each(|id| {
             self.applications.get_mut(&id).map(|app| match app.state {
                 AppState::Running {
                     stop: Some(restart),
+                    pid,
                     ..
-                } => app.stop(restart),
+                } => {
+                    if let Err(e) = app.stop(restart) {
+                        warn!("Failed to stop application ({}): {}", id, e);
+                    } else {
+                        if app.mode == Mode::Simple {
+                            timers.add_timer(Duration::from_secs(5), (id, pid.unwrap()));
+                        }
+                    }
+                }
                 _ => unreachable!(),
             });
         });
