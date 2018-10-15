@@ -166,11 +166,7 @@ impl Init {
     }
 
     fn handle_healthcheck_fail(&mut self, group: &str, _message: &str) {
-        self.applications
-            .iter()
-            .filter(|(_, app)| app.healthchecks.iter().any(|h| *h == group))
-            .map(|(id, _)| id.to_owned())
-            .collect::<Vec<_>>()
+        self.app_ids(|_, app| app.healthchecks.iter().any(|h| *h == group))
             .iter()
             .for_each(|id| {
                 self.fail_app(id);
@@ -216,12 +212,7 @@ impl Init {
 
     fn fail_dependents(&mut self, id: &str) {
         let mut failed = vec![id.to_owned()];
-        let mut remaining = self
-            .applications
-            .keys()
-            .filter(|k| k.as_str() != id)
-            .map(|k| k.to_owned())
-            .collect::<Vec<_>>();
+        let mut remaining = self.app_ids(|k, _| k != id);
 
         // add all dependents of failed app
         loop {
@@ -249,22 +240,17 @@ impl Init {
     }
 
     fn start_idle_applications(&mut self, stream_handler: &mut stream::Handler) {
-        // start idle apps
         if self
             .applications
             .values()
             .any(|a| a.state == AppState::Idle)
         {
-            // get list of running or completed OneShot apps
-            let running = self
-                .applications
-                .iter()
-                .filter(|(_, app)| match app.state {
-                    AppState::Running { stop: None, .. } => true,
-                    AppState::Stopped if app.mode == Mode::OneShot => true,
-                    _ => false,
-                }).map(|(k, _)| k.to_owned())
-                .collect::<Vec<_>>();
+            // get ids of running or completed OneShot apps
+            let running = self.app_ids(|_, app| match app.state {
+                AppState::Running { stop: None, .. } => true,
+                AppState::Stopped if app.mode == Mode::OneShot => true,
+                _ => false,
+            });
 
             self.applications
                 .iter_mut()
@@ -300,25 +286,16 @@ impl Init {
     }
 
     fn stop_stopped_applications(&mut self, timers: &mut Timers<(String, u32)>) {
-        // get ids of running apps flagged with stop
-        let ids = self
-            .applications
-            .iter()
-            .filter(|(_, app)| match app.state {
-                AppState::Running { stop: Some(_), .. } => true,
-                _ => false,
-            }).map(|(k, _)| k.to_owned())
-            .collect::<Vec<_>>();
-
-        // filter out those with running dependents
-        let ids = ids
-            .into_iter()
-            .filter(|id| {
+        // get ids of running apps flagged with stop and without running dependents
+        let ids = self.app_ids(|id, app| match app.state {
+            AppState::Running { stop: Some(_), .. } => {
                 !self.applications.values().any(|app| match app.state {
                     AppState::Idle | AppState::Stopped => false,
                     _ => app.depends.iter().any(|d| d == id),
                 })
-            }).collect::<Vec<_>>();
+            }
+            _ => false,
+        });
 
         // stop them and set timers for simple apps
         ids.into_iter().for_each(|id| {
@@ -339,5 +316,16 @@ impl Init {
                 _ => unreachable!(),
             });
         });
+    }
+
+    fn app_ids<F>(&self, filter: F) -> Vec<String>
+    where
+        F: Fn(&str, &Application) -> bool,
+    {
+        self.applications
+            .iter()
+            .filter(|(id, app)| filter(id, app))
+            .map(|(id, _)| id.to_owned())
+            .collect()
     }
 }
