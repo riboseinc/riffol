@@ -41,6 +41,7 @@ pub enum Mode {
 
 #[derive(Debug)]
 pub struct Application {
+    pub id: String,
     pub mode: Mode,
     pub dir: String,
     pub pidfile: Option<String>,
@@ -60,7 +61,6 @@ pub enum AppState {
     Idle,
     Starting {
         pid: u32,
-        fds: (Option<i32>, Option<i32>, Option<i32>),
         stop: Option<bool>,
     },
     Running {
@@ -68,51 +68,72 @@ pub enum AppState {
         pid: Option<u32>,
     },
     Stopping {
-        pid: u32,
+        pid: Option<u32>,
+        service_pid: Option<u32>,
         restart: bool,
     },
     Stopped,
 }
 
 impl Application {
-    pub fn start(&mut self) -> io::Result<()> {
+    pub fn start(&mut self, stream_handler: &mut stream::Handler) -> io::Result<()> {
         self.start_process(&self.start).map(|mut child| {
-            self.state = AppState::Starting {
-                pid: child.id(),
-                fds: (
-                    child.stdin.take().map(|s| s.into_raw_fd()),
-                    child.stdout.take().map(|s| s.into_raw_fd()),
-                    child.stderr.take().map(|s| s.into_raw_fd()),
-                ),
-                stop: None,
+            if let Some(stdout) = child.stdout.take().map(|s| s.into_raw_fd()) {
+                stream_handler.add_stream(stdout, self.stdout.clone().unwrap());
+            }
+            if let Some(stderr) = child.stderr.take().map(|s| s.into_raw_fd()) {
+                stream_handler.add_stream(stderr, self.stderr.clone().unwrap());
+            }
+            self.state = match self.mode {
+                Mode::Simple => AppState::Running {
+                    stop: None,
+                    pid: Some(child.id()),
+                },
+                _ => AppState::Starting {
+                    pid: child.id(),
+                    stop: None,
+                },
             }
         })
     }
 
-    pub fn stop(&mut self, restart: bool) -> io::Result<()> {
-        if self.mode == Mode::Simple {
-            if let AppState::Running { pid: Some(pid), .. } = self.state {
+    pub fn stop(&mut self) -> io::Result<()> {
+        if let AppState::Running {
+            pid: Some(pid),
+            stop: Some(restart),
+        } = self.state
+        {
+            if self.mode == Mode::Simple {
                 signal(pid, libc::SIGTERM);
-                self.state = AppState::Stopping { pid, restart };
-            }
-            Ok(())
-        } else {
-            self.start_process(&self.stop).map(|child| {
                 self.state = AppState::Stopping {
-                    pid: child.id(),
+                    pid: None,
+                    service_pid: Some(pid),
                     restart,
-                }
-            })
+                };
+                Ok(())
+            } else {
+                self.start_process(&self.stop).map(|child| {
+                    self.state = AppState::Stopping {
+                        pid: Some(child.id()),
+                        service_pid: Some(pid),
+                        restart,
+                    };
+                })
+            }
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Application not running",
+            ))
         }
     }
 
     pub fn schedule_stop(&mut self, restart: bool) {
         match self.state {
             AppState::Idle if !restart => self.state = AppState::Stopped,
-            AppState::Starting { pid, fds, stop } if stop != Some(false) => {
+            AppState::Starting { pid, stop } if stop != Some(false) => {
                 self.state = AppState::Starting {
                     pid,
-                    fds,
                     stop: Some(restart),
                 };
             }
@@ -122,10 +143,133 @@ impl Application {
                     stop: Some(restart),
                 };
             }
-            AppState::Stopping { pid, restart: true } => {
-                self.state = AppState::Stopping { pid, restart };
+            AppState::Stopping {
+                service_pid,
+                pid,
+                restart: true,
+            } => {
+                self.state = AppState::Stopping {
+                    service_pid,
+                    pid,
+                    restart,
+                };
             }
             _ => (),
+        }
+    }
+
+    pub fn claim_child(&mut self, child: u32, status: i32) -> bool {
+        match self.state {
+            AppState::Starting { pid, stop, .. } if pid == child => {
+                match self.mode {
+                    Mode::OneShot | Mode::Forking if status != 0 => {
+                        warn!(
+                            "Application {} failed to start. Exit code {}",
+                            self.id, status
+                        );
+                        if let Some(false) = stop {
+                            self.state = AppState::Stopped;
+                        } else {
+                            self.state = AppState::Idle;
+                        }
+                    }
+                    Mode::OneShot => self.state = AppState::Stopped,
+                    Mode::Forking => {
+                        if let Some(pid) = self.read_pidfile() {
+                            self.state = AppState::Running {
+                                stop: stop,
+                                pid: Some(pid),
+                            };
+                        } else {
+                            warn!("Couldn't read pidfile for {}", self.id);
+                            if let Err(e) = self.stop() {
+                                warn!("Application {} stop failed: {}", self.id, e);
+                            }
+                        }
+                    }
+                    Mode::Simple => unreachable!(),
+                }
+                true
+            }
+            AppState::Running { stop, .. } => {
+                warn!(
+                    "Application {} stopped unexpectedly. Exit code {}",
+                    self.id, status
+                );
+                match stop {
+                    Some(false) => self.state = AppState::Stopped,
+                    _ => self.state = AppState::Idle,
+                };
+                true
+            }
+            AppState::Stopping {
+                mut service_pid,
+                mut pid,
+                restart,
+            }
+                if service_pid == Some(child) || pid == Some(child) =>
+            {
+                if service_pid == Some(child) {
+                    service_pid = None;
+                }
+                if pid == Some(child) {
+                    pid = None
+                }
+                if service_pid.is_some() || pid.is_some() {
+                    self.state = AppState::Stopping {
+                        service_pid,
+                        pid,
+                        restart,
+                    };
+                } else if restart {
+                    self.state = AppState::Idle;
+                } else {
+                    self.state = AppState::Stopped;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_scheduled_stop(&self) -> bool {
+        match self.state {
+            AppState::Running { stop: Some(_), .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_stopping(&self) -> bool {
+        match self.state {
+            AppState::Stopping { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.state == AppState::Stopped
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.state == AppState::Idle
+    }
+
+    pub fn is_running(&self) -> bool {
+        match self.state {
+            AppState::Running { pid: Some(_), .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.mode == Mode::OneShot && self.state == AppState::Stopped
+    }
+
+    pub fn get_service_pid(&self) -> Option<u32> {
+        match self.state {
+            AppState::Running { pid, .. } => pid,
+            AppState::Stopping { pid, .. } => pid,
+            _ => None,
         }
     }
 
