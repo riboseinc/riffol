@@ -78,6 +78,7 @@ impl Init {
             let pid = unsafe { libc::wait(&mut status) } as u32;
             debug!("SIGCHLD received {} {}", pid, status);
             let mut failed_id = None;
+
             if let Some((id, app)) = self
                 .applications
                 .iter_mut()
@@ -134,44 +135,20 @@ impl Init {
                 }
             }
             if let Some(id) = failed_id {
-                self.fail_dependents(&id);
+                self.fail_app(&id);
             }
         } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
             debug!("Received termination signal ({})", sig);
             self.applications
                 .iter_mut()
-                .for_each(|(id, app)| match app.state {
-                    AppState::Idle => app.state = AppState::Stopped,
-                    AppState::Starting { pid, fds, .. } => {
-                        app.state = AppState::Starting {
-                            pid,
-                            fds,
-                            stop: Some(false),
-                        }
-                    }
-                    AppState::Running { .. } => {
-                        if let Err(e) = app.stop(false) {
-                            warn!("Application {} stop failed: {}", id, e);
-                        }
-                    }
-                    AppState::Stopping { pid, .. } => {
-                        app.state = AppState::Stopping {
-                            pid,
-                            restart: false,
-                        }
-                    }
-                    AppState::Stopped => (),
-                })
+                .for_each(|(_, app)| app.schedule_stop(false))
         }
     }
 
     fn handle_healthcheck_fail(&mut self, group: &str, _message: &str) {
         self.app_ids(|_, app| app.healthchecks.iter().any(|h| *h == group))
             .iter()
-            .for_each(|id| {
-                self.fail_app(id);
-                self.fail_dependents(id);
-            });
+            .for_each(|id| self.fail_app(id));
     }
 
     fn handle_timeout(&mut self, timers: &mut Timers<(String, u32)>) {
@@ -186,31 +163,6 @@ impl Init {
     }
 
     fn fail_app(&mut self, id: &str) {
-        if let Some(app) = self.applications.get_mut(id) {
-            match app.state {
-                AppState::Starting {
-                    pid,
-                    fds,
-                    stop: None,
-                } => {
-                    app.state = AppState::Starting {
-                        pid,
-                        fds,
-                        stop: Some(true),
-                    }
-                }
-                AppState::Running { stop: None, pid } => {
-                    app.state = AppState::Running {
-                        stop: Some(true),
-                        pid,
-                    }
-                }
-                _ => (),
-            };
-        }
-    }
-
-    fn fail_dependents(&mut self, id: &str) {
         let mut failed = vec![id.to_owned()];
         let mut remaining = self.app_ids(|k, _| k != id);
 
@@ -230,7 +182,11 @@ impl Init {
         }
 
         // mark all as Failed
-        failed.iter().for_each(|id| self.fail_app(id));
+        failed.iter().for_each(|id| {
+            self.applications
+                .get_mut(id)
+                .map(|app| app.schedule_stop(true));
+        });
     }
 
     fn all_stopped(&self) -> bool {
@@ -286,36 +242,41 @@ impl Init {
     }
 
     fn stop_stopped_applications(&mut self, timers: &mut Timers<(String, u32)>) {
-        // get ids of running apps flagged with stop and without running dependents
-        let ids = self.app_ids(|id, app| match app.state {
-            AppState::Running { stop: Some(_), .. } => {
-                !self.applications.values().any(|app| match app.state {
-                    AppState::Idle | AppState::Stopped => false,
-                    _ => app.depends.iter().any(|d| d == id),
-                })
-            }
+        if self.applications.values().any(|app| match app.state {
+            AppState::Running { stop: Some(_), .. } => true,
             _ => false,
-        });
+        }) {
+            // make a list of all dependencies of running apps
+            let depends = self.applications.values().fold(Vec::new(), |mut ds, app| {
+                if !(app.state == AppState::Idle || app.state == AppState::Stopped) {
+                    app.depends.iter().for_each(|d| ds.push(d.to_owned()));
+                }
+                ds
+            });
 
-        // stop them and set timers for simple apps
-        ids.into_iter().for_each(|id| {
-            self.applications.get_mut(&id).map(|app| match app.state {
-                AppState::Running {
-                    stop: Some(restart),
+            // call stop on any running application scheduled to stop
+            // on which no other running application depends
+            self.applications.iter_mut().for_each(|(id, app)| {
+                if let AppState::Running {
                     pid,
-                    ..
-                } => {
-                    if let Err(e) = app.stop(restart) {
-                        warn!("Failed to stop application ({}): {}", id, e);
-                    } else {
-                        if app.mode == Mode::Simple {
-                            timers.add_timer(Duration::from_secs(5), (id, pid.unwrap()));
+                    stop: Some(restart),
+                } = app.state
+                {
+                    if !depends.iter().any(|d| d == id) {
+                        if let Err(e) = app.stop(restart) {
+                            warn!("Failed to stop application ({}): {}", id, e);
+                        } else {
+                            if app.mode == Mode::Simple {
+                                timers.add_timer(
+                                    Duration::from_secs(5),
+                                    (id.to_owned(), pid.unwrap()),
+                                );
+                            }
                         }
                     }
                 }
-                _ => unreachable!(),
             });
-        });
+        }
     }
 
     fn app_ids<F>(&self, filter: F) -> Vec<String>

@@ -106,6 +106,29 @@ impl Application {
         }
     }
 
+    pub fn schedule_stop(&mut self, restart: bool) {
+        match self.state {
+            AppState::Idle if !restart => self.state = AppState::Stopped,
+            AppState::Starting { pid, fds, stop } if stop != Some(false) => {
+                self.state = AppState::Starting {
+                    pid,
+                    fds,
+                    stop: Some(restart),
+                };
+            }
+            AppState::Running { pid, stop } if stop != Some(false) => {
+                self.state = AppState::Running {
+                    pid,
+                    stop: Some(restart),
+                };
+            }
+            AppState::Stopping { pid, restart: true } => {
+                self.state = AppState::Stopping { pid, restart };
+            }
+            _ => (),
+        }
+    }
+
     fn start_process(&self, args: &[String]) -> io::Result<Child> {
         fn stdio(stream: &Option<stream::Stream>) -> Stdio {
             stream
