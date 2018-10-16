@@ -249,7 +249,8 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     limits,
                                     stdout,
                                     stderr,
-                                    depends: ap.requires.iter().map(|r| r.to_owned()).collect(),
+                                    /* TODO: check requires are valid */
+                                    requires: ap.requires.clone(),
                                     state: AppState::Idle,
                                 });
                             }

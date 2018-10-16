@@ -24,22 +24,47 @@
 use application::Application;
 use crossbeam_channel as cc;
 use libc;
-use signal::signal;
 use signal_hook;
+use std::time::Duration;
 use stream;
 use timers::Timers;
 
+struct InitApp {
+    inner: Application,
+    needs_stop: bool,
+    backoff: Duration,
+    depends: Vec<String>,
+    rdepends: Vec<String>,
+}
+
+impl InitApp {
+    fn new(app: Application) -> Self {
+        Self {
+            inner: app,
+            needs_stop: false,
+            backoff: Duration::from_secs(1),
+            depends: Vec::new(),
+            rdepends: Vec::new(),
+        }
+    }
+}
+
 pub struct Init {
-    applications: Vec<Application>,
+    applications: Vec<InitApp>,
 }
 
 impl Init {
     pub fn run(
-        applications: Vec<Application>,
-        sig_recv: cc::Receiver<i32>,
-        fail_recv: cc::Receiver<(String, String)>,
+        mut applications: Vec<Application>,
+        sig_recv: &cc::Receiver<i32>,
+        fail_recv: &cc::Receiver<(String, String)>,
     ) {
-        let mut apps = Self { applications };
+        let mut apps = Self {
+            applications: applications
+                .drain(..)
+                .map(|app| InitApp::new(app))
+                .collect(),
+        };
         let mut stream_handler = stream::Handler::new();
         let mut timers = Timers::<(String, u32)>::new();
 
@@ -76,44 +101,62 @@ impl Init {
             let child = unsafe { libc::wait(&mut status) } as u32;
             debug!("SIGCHLD received {} {}", child, status);
 
-            if !self
+            let index = self
                 .applications
                 .iter_mut()
-                .any(|app| app.claim_child(child, status))
-            {
+                .position(|app: &mut InitApp| app.inner.claim_child(child, status));
+
+            if let Some(app) = index.map(|n| self.applications.get_mut(n).unwrap()) {
+                if app.inner.is_dead() {
+                    // The application just died unexpectedly so
+                    // we need to stop the application in order to
+                    // perform any cleanup.
+                    app.needs_stop = true;
+                } else if app.inner.is_runaway() {
+                    // The child was the stop process for an
+                    // application and the main process is still
+                    // active.  We set a kill timer in case the
+                    // applicatiion doesn't die naturally
+                    // TODO ...
+                    // timers.add_timer(Duration::from_secs(5), Action::Kill(app));
+                } else if app.inner.is_idle() {
+                    // Application has gone idle so we can remove
+                    // any pending kill timers
+                    // TODO ...
+                }
+            } else {
                 info!("Reaped zombie with PID {}", child);
             }
         } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
             debug!("Received termination signal ({})", sig);
             self.applications
                 .iter_mut()
-                .for_each(|app| app.schedule_stop(false))
+                .for_each(|app| app.needs_stop = true)
         }
     }
 
     fn handle_healthcheck_fail(&mut self, group: &str, _message: &str) {
-        self.app_ids(|app| app.healthchecks.iter().any(|h| *h == group))
+        self.app_ids(|app| app.inner.healthchecks.iter().any(|h| *h == group))
             .iter()
             .for_each(|id| self.fail_app(id));
     }
 
     fn handle_timeout(&mut self, timers: &mut Timers<(String, u32)>) {
         let payload = timers.remove_earliest();
-        let app = self.get_app(&payload.0);
-        if app.is_stopping() && app.get_service_pid() == Some(payload.1) {
-            signal(payload.1, libc::SIGKILL);
-        }
+        let app = self.get_app_mut(&payload.0);
+        app.inner.kill(payload.1);
     }
 
     fn fail_app(&mut self, id: &str) {
         let mut failed = vec![id.to_owned()];
-        let mut remaining = self.app_ids(|app| app.id != id);
+        let mut remaining = self.app_ids(|app| app.inner.id != id);
 
         // add all dependents of failed app
         loop {
             let (mut depends, others) = remaining.into_iter().partition::<Vec<_>, _>(|id| {
                 self.get_app(id)
-                    .depends
+                    .inner
+                    .requires
                     .iter()
                     .any(|a| failed.iter().any(|b| a == b))
             });
@@ -125,38 +168,42 @@ impl Init {
         }
 
         // mark all as Failed
-        failed
-            .iter()
-            .for_each(|id| self.get_app_mut(id).schedule_stop(true));
+        failed.iter().for_each(|_id| () /* TODO stop list */);
     }
 
     fn all_stopped(&self) -> bool {
-        self.applications.iter().all(|app| app.is_stopped())
+        self.applications
+            .iter()
+            .all(|app| app.inner.is_complete() || app.inner.is_idle())
     }
 
     fn start_idle_applications(&mut self, stream_handler: &mut stream::Handler) {
-        if self.applications.iter().any(|app| app.is_idle()) {
+        if self.applications.iter().any(|app| app.inner.is_idle()) {
             // get ids of running or completed OneShot apps
-            let running = self.app_ids(|app| app.is_running() || app.is_complete());
+            let running = self.app_ids(|app| app.inner.is_started());
 
             self.applications
                 .iter_mut()
-                .filter(|app| app.is_idle())
+                .filter(|app| app.inner.is_idle())
                 .for_each(|app| {
-                    if app.depends.iter().all(|d| running.iter().any(|r| d == r)) {
-                        if let Err(e) = app.start(stream_handler) {
-                            warn!("Failed to start application ({}): {}", app.id, e);
-                        }
+                    if app
+                        .inner
+                        .requires
+                        .iter()
+                        .all(|d| running.iter().any(|r| d == r))
+                    {
+                        app.inner.start(stream_handler);
+                        /* TODO set timer */
                     }
                 });
         }
     }
 
-    fn stop_stopped_applications(&mut self, _timers: &mut Timers<(String, u32)>) {
-        if self.applications.iter().any(|app| app.is_scheduled_stop()) {
+    fn stop_stopped_applications(&mut self, timers: &mut Timers<(String, u32)>) {
+        if self.applications.iter().any(|app| app.needs_stop) {
             // make a list of all dependencies of running apps
             let depends = self.applications.iter().fold(Vec::new(), |mut ds, app| {
-                if !(app.is_idle() || app.is_stopped()) {
+                if !(app.inner.is_idle() || app.inner.is_complete()) {
                     app.depends.iter().for_each(|d| ds.push(d.to_owned()));
                 }
                 ds
@@ -165,11 +212,9 @@ impl Init {
             // call stop on any running application scheduled to stop
             // on which no other running application depends
             self.applications.iter_mut().for_each(|app| {
-                if app.is_scheduled_stop() {
-                    if !depends.iter().any(|d| d == &app.id) {
-                        if let Err(e) = app.stop() {
-                            warn!("Failed to stop application ({}): {}", app.id, e);
-                        }
+                if app.needs_stop && !depends.iter().any(|d| d == &app.inner.id) {
+                    if let Some(pid) = app.inner.stop() {
+                        timers.add_timer(Duration::from_secs(5), (app.inner.id.to_owned(), pid));
                     }
                 }
             });
@@ -178,26 +223,26 @@ impl Init {
 
     fn app_ids<F>(&self, filter: F) -> Vec<String>
     where
-        F: Fn(&Application) -> bool,
+        F: Fn(&InitApp) -> bool,
     {
         self.applications
             .iter()
             .filter(|app| filter(app))
-            .map(|app| app.id.to_owned())
+            .map(|app| app.inner.id.to_owned())
             .collect()
     }
 
-    fn get_app(&self, id: &str) -> &Application {
+    fn get_app(&self, id: &str) -> &InitApp {
         self.applications
             .iter()
-            .find(|app| app.id == id)
+            .find(|app| app.inner.id == id)
             .expect("No such application id")
     }
 
-    fn get_app_mut(&mut self, id: &str) -> &mut Application {
+    fn get_app_mut(&mut self, id: &str) -> &mut InitApp {
         self.applications
             .iter_mut()
-            .find(|app| app.id == id)
+            .find(|app| app.inner.id == id)
             .expect("No such application id")
     }
 }

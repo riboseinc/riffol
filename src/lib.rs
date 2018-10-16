@@ -58,6 +58,6 @@ pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) -> Result<(), 
 
     let sig_recv = signal::recv_signals();
     let check_recv = health::recv_checks(&checks);
-    init::Init::run(apps, sig_recv, check_recv);
+    init::Init::run(apps, &sig_recv, &check_recv);
     Ok(())
 }
