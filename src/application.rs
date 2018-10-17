@@ -73,11 +73,11 @@ pub enum AppState {
 }
 
 impl Application {
-    pub fn start(&mut self, stream_handler: &mut stream::Handler) -> Option<u32> {
+    pub fn start(&mut self, stream_handler: &mut stream::Handler) -> bool {
         self.start_process(&self.start)
             .map_err(|e| warn!("Failed to start application {}: {:?}", self.id, e))
             .ok()
-            .and_then(|mut child| {
+            .map(|mut child| {
                 if let Some(stdout) = child.stdout.take().map(|s| s.into_raw_fd()) {
                     stream_handler.add_stream(stdout, self.stdout.clone().unwrap());
                 }
@@ -89,19 +89,19 @@ impl Application {
                         self.state = AppState::Running {
                             app_pid: Some(child.id()),
                         };
-                        None
+                        false
                     }
                     _ => {
                         self.state = AppState::Starting {
                             exec_pid: child.id(),
                         };
-                        Some(child.id())
+                        true
                     }
                 }
-            })
+            }).unwrap_or(false)
     }
 
-    pub fn stop(&mut self) -> Option<u32> {
+    pub fn stop(&mut self) -> bool {
         let app_pid = self.get_app_pid();
         if self.mode == Mode::Simple {
             signal(app_pid.unwrap(), libc::SIGTERM);
@@ -109,7 +109,7 @@ impl Application {
                 exec_pid: None,
                 app_pid,
             };
-            app_pid
+            true
         } else {
             let child = self
                 .start_process(&self.stop)
@@ -120,12 +120,12 @@ impl Application {
                     exec_pid: Some(child.id()),
                     app_pid,
                 };
-                Some(child.id())
+                true
             } else {
                 match app_pid {
                     None | Some(0) => {
                         self.state = AppState::Idle;
-                        None
+                        false
                     }
                     Some(pid) => {
                         signal(pid, libc::SIGTERM);
@@ -133,15 +133,31 @@ impl Application {
                             exec_pid: None,
                             app_pid: Some(pid),
                         };
-                        Some(pid)
+                        true
                     }
                 }
             }
         }
     }
 
-    pub fn kill(&mut self, _pid: u32) {
-        /* TODO */
+    pub fn kill(&mut self) {
+        let pid = match self.state {
+            AppState::Starting { exec_pid, .. } => exec_pid,
+            AppState::Running {
+                app_pid: Some(app_pid),
+                ..
+            } => app_pid,
+            AppState::Stopping {
+                exec_pid: Some(exec_pid),
+                ..
+            } => exec_pid,
+            AppState::Stopping {
+                app_pid: Some(app_pid),
+                ..
+            } => app_pid,
+            _ => unreachable!(),
+        };
+        signal(pid, libc::SIGKILL);
     }
 
     pub fn claim_child(&mut self, child: u32, status: i32) -> bool {

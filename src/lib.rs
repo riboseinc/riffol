@@ -45,7 +45,6 @@ mod init;
 mod limit;
 mod signal;
 mod stream;
-mod timers;
 
 pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) -> Result<(), String> {
     let config::Riffol {
