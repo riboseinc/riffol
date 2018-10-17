@@ -25,6 +25,7 @@ use application::Application;
 use crossbeam_channel as cc;
 use libc;
 use signal_hook;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use stream;
 
@@ -66,6 +67,9 @@ impl Init {
                 .map(|app| InitApp::new(app))
                 .collect(),
         };
+
+        apps.setup_dependencies();
+
         let mut stream_handler = stream::Handler::new();
 
         while !apps.all_stopped() {
@@ -241,5 +245,80 @@ impl Init {
             times
         });
         times.iter().min().map(|t| *t - (Instant::now().min(*t)))
+    }
+
+    fn setup_dependencies(&mut self) {
+        // first work out dependencies
+        let mut all_deps = {
+            let idxs = self
+                .applications
+                .iter()
+                .enumerate()
+                .map(|(idx, app)| (app.inner.id.as_str(), idx))
+                .collect::<HashMap<_, _>>();
+
+            self.applications
+                .iter()
+                .map(|app| {
+                    let mut deps = app
+                        .inner
+                        .requires
+                        .iter()
+                        .filter(|dep| dep.as_str() != app.inner.id.as_str())
+                        .map(|dep| dep.as_str())
+                        .collect::<Vec<_>>();
+                    let mut others = self
+                        .applications
+                        .iter()
+                        .filter(|app| !deps.iter().any(|&dep| dep != app.inner.id.as_str()))
+                        .map(|app| app.inner.id.as_str())
+                        .collect::<Vec<_>>();
+                    loop {
+                        let (mut pass, fail): (Vec<&str>, Vec<&str>) =
+                            others.iter().partition(|&&oid| {
+                                deps.iter().any(|dep| {
+                                    idxs.get(dep).map_or(false, |&idx| {
+                                        self.applications[idx]
+                                            .inner
+                                            .requires
+                                            .iter()
+                                            .any(|id| id.as_str() == oid)
+                                    })
+                                })
+                            });
+                        if pass.is_empty() {
+                            break;
+                        }
+                        deps.append(&mut pass);
+                        others = fail;
+                    }
+                    deps.iter()
+                        .filter_map(|id| idxs.get(id).map(|&id| id))
+                        .collect::<Vec<_>>()
+                }).collect::<Vec<_>>()
+        };
+
+        let mut all_rdeps = self
+            .applications
+            .iter()
+            .enumerate()
+            .map(|(app_idx, _)| {
+                all_deps
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, deps)| deps.iter().any(|&idx| idx == app_idx))
+                    .map(|(idx, _)| idx)
+                    .collect::<Vec<_>>()
+            }).collect::<Vec<_>>();
+
+        self.applications
+            .iter_mut()
+            .zip(all_deps.drain(..))
+            .for_each(|(app, deps)| app.depends = deps);
+
+        self.applications
+            .iter_mut()
+            .zip(all_rdeps.drain(..))
+            .for_each(|(app, rdeps)| app.rdepends = rdeps);
     }
 }
