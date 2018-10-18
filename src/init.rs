@@ -136,6 +136,10 @@ impl Init {
                     // any pending kill timers
                     app.kill_time = None;
                     app.start_time = Some(Instant::now() + Duration::from_secs(1));
+                } else if app.inner.is_complete() {
+                    // OneShot Application has completed so we can remove
+                    // any pending kill timers
+                    app.kill_time = None;
                 }
             } else {
                 info!("Reaped zombie with PID {}", child);
