@@ -103,7 +103,9 @@ impl Application {
 
     pub fn stop(&mut self) -> bool {
         let app_pid = self.get_app_pid();
-        if self.mode == Mode::Simple {
+        if self.mode == Mode::OneShot {
+            false
+        } else if self.mode == Mode::Simple {
             signal(app_pid.unwrap(), libc::SIGTERM);
             self.state = AppState::Stopping {
                 exec_pid: None,
@@ -235,8 +237,8 @@ impl Application {
         self.state == AppState::Idle
     }
 
-    pub fn is_complete(&self) -> bool {
-        self.state == AppState::Complete
+    pub fn is_stopped(&self) -> bool {
+        self.state == AppState::Idle || self.state == AppState::Complete
     }
 
     pub fn is_started(&self) -> bool {

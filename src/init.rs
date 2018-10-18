@@ -91,7 +91,8 @@ impl Init {
             match select.wait() {
                 Some(Event::Signal(signal)) => {
                     apps.handle_signal(signal);
-                    shutdown = signal == signal_hook::SIGTERM || signal == signal_hook::SIGINT;
+                    shutdown =
+                        shutdown || signal == signal_hook::SIGTERM || signal == signal_hook::SIGINT;
                 }
                 Some(Event::Fail((group, msg))) => apps.handle_healthcheck_fail(&group, &msg),
                 Some(Event::Timer) => (),
@@ -120,9 +121,11 @@ impl Init {
             let mut stop_idx = None;
             if let Some(idx) = index {
                 let app = &mut self.applications[idx];
+                // remove kill timer as process has died by some other means
+                app.kill_time = None;
                 if app.inner.is_dead() {
                     // The application just died unexpectedly.  We
-                    // need to stop the application in order to
+                    // still need to run the stop command to
                     // perform any cleanup.
                     stop_idx = Some(idx);
                 } else if app.inner.is_runaway() {
@@ -132,9 +135,7 @@ impl Init {
                     // applicatiion doesn't die naturally
                     app.kill_time = Some(Instant::now() + Duration::from_secs(5));
                 } else if app.inner.is_idle() {
-                    // Application has gone idle so we can remove
-                    // any pending kill timers
-                    app.kill_time = None;
+                    // Application has gone idle so we can set a restart time
                     app.start_time = Some(Instant::now() + Duration::from_secs(1));
                 }
             } else {
@@ -144,30 +145,33 @@ impl Init {
             stop_idx.map_or((), |idx| self.schedule_stop(idx));
         } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
             debug!("Received termination signal ({})", sig);
-            self.applications
-                .iter_mut()
-                .for_each(|app| app.needs_stop = true);
+            self.applications.iter_mut().for_each(|app| {
+                if !(app.inner.is_stopped()) {
+                    app.needs_stop = true;
+                }
+            });
         }
     }
 
     fn handle_healthcheck_fail(&mut self, group: &str, _message: &str) {
         let fails = self.app_idxs(|app| app.inner.healthchecks.iter().any(|h| *h == group));
-        fails.iter().for_each(|idx| self.schedule_stop(*idx));
+        fails.iter().for_each(|&idx| self.schedule_stop(idx));
     }
 
     fn schedule_stop(&mut self, idx: usize) {
         let mut stops = self.applications[idx].rdepends.clone();
         stops.push(idx);
 
-        stops.iter().for_each(|idx| {
-            self.applications[*idx].needs_stop = true;
+        stops.iter().for_each(|&idx| {
+            let app = &mut self.applications[idx];
+            if !(app.inner.is_stopped()) {
+                app.needs_stop = true;
+            }
         });
     }
 
     fn all_stopped(&self) -> bool {
-        self.applications
-            .iter()
-            .all(|app| app.inner.is_complete() || app.inner.is_idle())
+        self.applications.iter().all(|app| app.inner.is_stopped())
     }
 
     fn do_starts(&mut self, stream_handler: &mut stream::Handler) {
@@ -187,6 +191,7 @@ impl Init {
 
         starts.drain(..).for_each(|idx| {
             let app = &mut self.applications[idx];
+            app.start_time = None;
             if app.inner.start(stream_handler) {
                 app.kill_time = Some(Instant::now() + Duration::from_secs(5));
             } else if app.inner.is_idle() {
@@ -204,7 +209,7 @@ impl Init {
             .filter(|(_, app)| {
                 app.rdepends
                     .iter()
-                    .all(|idx| self.applications[*idx].inner.is_idle())
+                    .all(|&idx| self.applications[idx].inner.is_stopped())
             }).map(|(idx, _)| idx)
             .collect::<Vec<_>>();
 
