@@ -120,6 +120,8 @@ impl Init {
             let mut stop_idx = None;
             if let Some(idx) = index {
                 let app = &mut self.applications[idx];
+                // remove kill timer as process has died by some other means
+                app.kill_time = None;
                 if app.inner.is_dead() {
                     // The application just died unexpectedly.  We
                     // need to stop the application in order to
@@ -132,14 +134,8 @@ impl Init {
                     // applicatiion doesn't die naturally
                     app.kill_time = Some(Instant::now() + Duration::from_secs(5));
                 } else if app.inner.is_idle() {
-                    // Application has gone idle so we can remove
-                    // any pending kill timers
-                    app.kill_time = None;
+                    // Application has gone idle so we can set a restart time
                     app.start_time = Some(Instant::now() + Duration::from_secs(1));
-                } else if app.inner.is_complete() {
-                    // OneShot Application has completed so we can remove
-                    // any pending kill timers
-                    app.kill_time = None;
                 }
             } else {
                 info!("Reaped zombie with PID {}", child);
@@ -191,6 +187,7 @@ impl Init {
 
         starts.drain(..).for_each(|idx| {
             let app = &mut self.applications[idx];
+            app.start_time = None;
             if app.inner.start(stream_handler) {
                 app.kill_time = Some(Instant::now() + Duration::from_secs(5));
             } else if app.inner.is_idle() {
