@@ -72,10 +72,13 @@ impl Init {
 
         let mut stream_handler = stream::Handler::new();
 
-        while !apps.all_stopped() {
+        let mut shutdown = false;
+        while !(shutdown && apps.all_stopped()) {
             apps.do_kills();
             apps.do_stops();
-            apps.do_starts(&mut stream_handler);
+            if !shutdown {
+                apps.do_starts(&mut stream_handler);
+            }
 
             let timer = apps.get_next_timeout().map(cc::after);
             let mut select = cc::Select::new()
@@ -86,7 +89,10 @@ impl Init {
             }
 
             match select.wait() {
-                Some(Event::Signal(signal)) => apps.handle_signal(signal),
+                Some(Event::Signal(signal)) => {
+                    apps.handle_signal(signal);
+                    shutdown = signal == signal_hook::SIGTERM || signal == signal_hook::SIGINT;
+                }
                 Some(Event::Fail((group, msg))) => apps.handle_healthcheck_fail(&group, &msg),
                 Some(Event::Timer) => (),
                 None => unreachable!(),
@@ -140,7 +146,7 @@ impl Init {
             debug!("Received termination signal ({})", sig);
             self.applications
                 .iter_mut()
-                .for_each(|app| app.needs_stop = true)
+                .for_each(|app| app.needs_stop = true);
         }
     }
 
@@ -248,7 +254,6 @@ impl Init {
     }
 
     fn setup_dependencies(&mut self) {
-        // first work out dependencies
         let mut all_deps = {
             let idxs = self
                 .applications
@@ -259,62 +264,52 @@ impl Init {
 
             self.applications
                 .iter()
-                .map(|app| {
-                    let mut deps = app
-                        .inner
-                        .requires
-                        .iter()
-                        .filter(|dep| dep.as_str() != app.inner.id.as_str())
-                        .map(|dep| dep.as_str())
-                        .collect::<Vec<_>>();
-                    let mut others = self
+                .enumerate()
+                .map(|(idx, _)| {
+                    let (mut deps, mut others): (Vec<_>, Vec<_>) = self
                         .applications
                         .iter()
-                        .filter(|app| !deps.iter().any(|&dep| dep != app.inner.id.as_str()))
-                        .map(|app| app.inner.id.as_str())
-                        .collect::<Vec<_>>();
+                        .enumerate()
+                        .map(|(i, _)| i)
+                        .partition(|&i| i == idx);
                     loop {
-                        let (mut pass, fail): (Vec<&str>, Vec<&str>) =
-                            others.iter().partition(|&&oid| {
-                                deps.iter().any(|dep| {
-                                    idxs.get(dep).map_or(false, |&idx| {
-                                        self.applications[idx]
-                                            .inner
-                                            .requires
-                                            .iter()
-                                            .any(|id| id.as_str() == oid)
-                                    })
+                        let (mut pass, fail): (Vec<_>, Vec<_>) = others.iter().partition(|&oidx| {
+                            deps.iter().any(|&didx| {
+                                self.applications[didx].inner.requires.iter().any(|id| {
+                                    idxs.get(id.as_str())
+                                        .map(|idx| idx == oidx)
+                                        .unwrap_or(false)
                                 })
-                            });
+                            })
+                        });
                         if pass.is_empty() {
                             break;
                         }
                         deps.append(&mut pass);
                         others = fail;
                     }
-                    deps.iter()
-                        .filter_map(|id| idxs.get(id).map(|&id| id))
-                        .collect::<Vec<_>>()
+                    deps.swap_remove(0);
+                    deps
                 }).collect::<Vec<_>>()
         };
+
+        self.applications
+            .iter_mut()
+            .zip(all_deps.drain(..))
+            .for_each(|(app, deps)| app.depends = deps);
 
         let mut all_rdeps = self
             .applications
             .iter()
             .enumerate()
             .map(|(app_idx, _)| {
-                all_deps
+                self.applications
                     .iter()
                     .enumerate()
-                    .filter(|(_, deps)| deps.iter().any(|&idx| idx == app_idx))
+                    .filter(|(_, app)| app.depends.iter().any(|&idx| idx == app_idx))
                     .map(|(idx, _)| idx)
                     .collect::<Vec<_>>()
             }).collect::<Vec<_>>();
-
-        self.applications
-            .iter_mut()
-            .zip(all_deps.drain(..))
-            .for_each(|(app, deps)| app.depends = deps);
 
         self.applications
             .iter_mut()
