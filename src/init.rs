@@ -91,7 +91,8 @@ impl Init {
             match select.wait() {
                 Some(Event::Signal(signal)) => {
                     apps.handle_signal(signal);
-                    shutdown = signal == signal_hook::SIGTERM || signal == signal_hook::SIGINT;
+                    shutdown =
+                        shutdown || signal == signal_hook::SIGTERM || signal == signal_hook::SIGINT;
                 }
                 Some(Event::Fail((group, msg))) => apps.handle_healthcheck_fail(&group, &msg),
                 Some(Event::Timer) => (),
