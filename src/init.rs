@@ -125,7 +125,7 @@ impl Init {
                 app.kill_time = None;
                 if app.inner.is_dead() {
                     // The application just died unexpectedly.  We
-                    // need to stop the application in order to
+                    // still need to run the stop command to
                     // perform any cleanup.
                     stop_idx = Some(idx);
                 } else if app.inner.is_runaway() {
@@ -145,23 +145,28 @@ impl Init {
             stop_idx.map_or((), |idx| self.schedule_stop(idx));
         } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
             debug!("Received termination signal ({})", sig);
-            self.applications
-                .iter_mut()
-                .for_each(|app| app.needs_stop = true);
+            self.applications.iter_mut().for_each(|app| {
+                if !(app.inner.is_idle() || app.inner.is_complete()) {
+                    app.needs_stop = true;
+                }
+            });
         }
     }
 
     fn handle_healthcheck_fail(&mut self, group: &str, _message: &str) {
         let fails = self.app_idxs(|app| app.inner.healthchecks.iter().any(|h| *h == group));
-        fails.iter().for_each(|idx| self.schedule_stop(*idx));
+        fails.iter().for_each(|&idx| self.schedule_stop(idx));
     }
 
     fn schedule_stop(&mut self, idx: usize) {
         let mut stops = self.applications[idx].rdepends.clone();
         stops.push(idx);
 
-        stops.iter().for_each(|idx| {
-            self.applications[*idx].needs_stop = true;
+        stops.iter().for_each(|&idx| {
+            let app = &mut self.applications[idx];
+            if !(app.inner.is_idle() || app.inner.is_complete()) {
+                app.needs_stop = true;
+            }
         });
     }
 

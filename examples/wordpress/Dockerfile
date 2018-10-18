@@ -18,7 +18,7 @@ COPY wordpress.php /etc/wordpress/config-default.php
 COPY wordpress.sql /tmp
 COPY initialise-mysql.sh /tmp
 
-RUN /root/.cargo/bin/cargo install riffol --git https://github.com/riboseinc/riffol.git --rev 3ab29b6
+RUN /root/.cargo/bin/cargo install riffol --git https://github.com/riboseinc/riffol.git --rev 1157b1b
 
 COPY riffol.conf /etc
 
