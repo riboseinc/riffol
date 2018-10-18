@@ -155,7 +155,10 @@ impl Application {
                 app_pid: Some(app_pid),
                 ..
             } => app_pid,
-            _ => unreachable!(),
+            _ => {
+                eprintln!("{:?}", self);
+                unreachable!();
+            }
         };
         signal(pid, libc::SIGKILL);
     }
