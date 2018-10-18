@@ -151,7 +151,7 @@ enum Stream {
 
 #[derive(Debug)]
 pub struct Riffol {
-    pub applications: HashMap<String, application::Application>,
+    pub applications: Vec<application::Application>,
     pub dependencies: Vec<String>,
     pub healthchecks: Vec<IntervalHealthCheck>,
 }
@@ -178,17 +178,17 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
     let config = nereon::configure::<Config, _, _>(&nos, args)?;
 
     let mut riffol = Riffol {
-        applications: HashMap::new(),
-        dependencies: vec![],
-        healthchecks: vec![],
+        applications: Vec::new(),
+        dependencies: Vec::new(),
+        healthchecks: Vec::new(),
     };
 
     for (_, init) in config.init {
         for group_name in init.application_groups {
             match config.application_group.get(&group_name) {
                 Some(group) => {
-                    for ap_name in &group.applications {
-                        match config.application.get(ap_name) {
+                    for id in &group.applications {
+                        match config.application.get(id) {
                             Some(ap) => {
                                 let mode = ap.mode.as_ref().map_or_else(
                                     || Ok(Mode::Simple),
@@ -237,25 +237,24 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                     },
                                 };
 
-                                riffol.applications.insert(
-                                    ap_name.to_owned(),
-                                    application::Application {
-                                        mode,
-                                        dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
-                                        pidfile: ap.pidfile.clone(),
-                                        env,
-                                        start: ap.start.clone(),
-                                        stop: ap.stop.clone(),
-                                        healthchecks,
-                                        limits,
-                                        stdout,
-                                        stderr,
-                                        depends: ap.requires.iter().map(|r| r.to_owned()).collect(),
-                                        state: AppState::Idle,
-                                    },
-                                );
+                                riffol.applications.push(application::Application {
+                                    id: id.to_owned(),
+                                    mode,
+                                    dir: ap.dir.clone().unwrap_or_else(|| "/tmp".to_owned()),
+                                    pidfile: ap.pidfile.clone(),
+                                    env,
+                                    start: ap.start.clone(),
+                                    stop: ap.stop.clone(),
+                                    healthchecks,
+                                    limits,
+                                    stdout,
+                                    stderr,
+                                    /* TODO: check requires are valid */
+                                    requires: ap.requires.clone(),
+                                    state: AppState::Idle,
+                                });
                             }
-                            None => return Err(format!("No such application \"{}\"", ap_name)),
+                            None => return Err(format!("No such application \"{}\"", id)),
                         }
                     }
                     for dep_name in &group.dependencies {

@@ -22,6 +22,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use crossbeam_channel as cc;
+use libc;
 use signal_hook;
 use std::thread;
 
@@ -50,4 +51,8 @@ pub fn recv_signals() -> cc::Receiver<i32> {
         }
     });
     sig_recv
+}
+
+pub fn signal(pid: u32, sig: i32) {
+    unsafe { libc::kill(pid as libc::pid_t, sig) };
 }

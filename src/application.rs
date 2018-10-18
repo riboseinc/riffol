@@ -21,7 +21,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use libc;
 use limit::{setlimit, RLimit};
+use signal::signal;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -39,6 +41,7 @@ pub enum Mode {
 
 #[derive(Debug)]
 pub struct Application {
+    pub id: String,
     pub mode: Mode,
     pub dir: String,
     pub pidfile: Option<String>,
@@ -50,50 +53,221 @@ pub struct Application {
     pub stdout: Option<stream::Stream>,
     pub stderr: Option<stream::Stream>,
     pub state: AppState,
-    pub depends: Vec<String>,
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum AppState {
     Idle,
     Starting {
-        pid: u32,
-        fds: (Option<i32>, Option<i32>, Option<i32>),
-        stop: Option<bool>,
+        exec_pid: u32,
     },
     Running {
-        stop: Option<bool>,
-        pid: Option<u32>,
+        app_pid: Option<u32>,
     },
     Stopping {
-        pid: u32,
-        restart: bool,
+        app_pid: Option<u32>,
+        exec_pid: Option<u32>,
     },
-    Stopped,
+    Complete,
 }
 
 impl Application {
-    pub fn start(&mut self) -> io::Result<()> {
-        self.start_process(&self.start).map(|mut child| {
-            self.state = AppState::Starting {
-                pid: child.id(),
-                fds: (
-                    child.stdin.take().map(|s| s.into_raw_fd()),
-                    child.stdout.take().map(|s| s.into_raw_fd()),
-                    child.stderr.take().map(|s| s.into_raw_fd()),
-                ),
-                stop: None,
-            }
-        })
+    pub fn start(&mut self, stream_handler: &mut stream::Handler) -> bool {
+        self.start_process(&self.start)
+            .map_err(|e| warn!("Failed to start application {}: {:?}", self.id, e))
+            .ok()
+            .map(|mut child| {
+                if let Some(stdout) = child.stdout.take().map(|s| s.into_raw_fd()) {
+                    stream_handler.add_stream(stdout, self.stdout.clone().unwrap());
+                }
+                if let Some(stderr) = child.stderr.take().map(|s| s.into_raw_fd()) {
+                    stream_handler.add_stream(stderr, self.stderr.clone().unwrap());
+                }
+                match self.mode {
+                    Mode::Simple => {
+                        self.state = AppState::Running {
+                            app_pid: Some(child.id()),
+                        };
+                        false
+                    }
+                    _ => {
+                        self.state = AppState::Starting {
+                            exec_pid: child.id(),
+                        };
+                        true
+                    }
+                }
+            }).unwrap_or(false)
     }
 
-    pub fn stop(&mut self, restart: bool) -> io::Result<()> {
-        self.start_process(&self.stop).map(|child| {
+    pub fn stop(&mut self) -> bool {
+        let app_pid = self.get_app_pid();
+        if self.mode == Mode::OneShot {
+            false
+        } else if self.mode == Mode::Simple {
+            signal(app_pid.unwrap(), libc::SIGTERM);
             self.state = AppState::Stopping {
-                pid: child.id(),
-                restart,
+                exec_pid: None,
+                app_pid,
+            };
+            true
+        } else {
+            let child = self
+                .start_process(&self.stop)
+                .map_err(|e| warn!("Failed to stop application {}: {:?}", self.id, e))
+                .ok();
+            if let Some(child) = child {
+                self.state = AppState::Stopping {
+                    exec_pid: Some(child.id()),
+                    app_pid,
+                };
+                true
+            } else {
+                match app_pid {
+                    None | Some(0) => {
+                        self.state = AppState::Idle;
+                        false
+                    }
+                    Some(pid) => {
+                        signal(pid, libc::SIGTERM);
+                        self.state = AppState::Stopping {
+                            exec_pid: None,
+                            app_pid: Some(pid),
+                        };
+                        true
+                    }
+                }
             }
-        })
+        }
+    }
+
+    pub fn kill(&mut self) {
+        let pid = match self.state {
+            AppState::Starting { exec_pid, .. } => exec_pid,
+            AppState::Running {
+                app_pid: Some(app_pid),
+                ..
+            } => app_pid,
+            AppState::Stopping {
+                exec_pid: Some(exec_pid),
+                ..
+            } => exec_pid,
+            AppState::Stopping {
+                app_pid: Some(app_pid),
+                ..
+            } => app_pid,
+            _ => unreachable!(),
+        };
+        signal(pid, libc::SIGKILL);
+    }
+
+    pub fn claim_child(&mut self, child: u32, status: i32) -> bool {
+        match self.state {
+            AppState::Starting { exec_pid } if exec_pid == child => {
+                match self.mode {
+                    Mode::OneShot => {
+                        if status == 0 {
+                            info!("Application {} completed successfully", self.id);
+                            self.state = AppState::Complete;
+                        } else {
+                            warn!("Application {} failed. Exit code {}", self.id, status);
+                            self.state = AppState::Idle;
+                        }
+                    }
+                    Mode::Forking => {
+                        if status == 0 {
+                            info!("Application {} started successfully", self.id);
+                            let pid = self.read_pidfile();
+                            if pid == None {
+                                warn!("Couldn't read pidfile for {}", self.id);
+                            }
+                            self.state = AppState::Running { app_pid: pid };
+                        } else {
+                            warn!(
+                                "Application {} failed to start. Exit code {}",
+                                self.id, status
+                            );
+                            self.state = AppState::Idle;
+                        }
+                    }
+                    Mode::Simple => unreachable!(),
+                }
+                true
+            }
+            AppState::Running { app_pid: pid, .. } if pid == Some(child) => {
+                warn!(
+                    "Application {} died unexpectedly. Exit code {}",
+                    self.id, status
+                );
+                // This is an error regardless of exit status We need
+                // to run the exec stop command but can't do it from
+                // here as we'd bypass Init's timeouts so we need to
+                // signal a failure and Init can clean up ... hence Some(0)
+                self.state = AppState::Running { app_pid: Some(0) };
+                true
+            }
+            AppState::Stopping { app_pid, exec_pid }
+                if app_pid == Some(child) || exec_pid == Some(child) =>
+            {
+                if app_pid.is_none() || exec_pid.is_none() {
+                    info!("Application {} stopped", self.id);
+                    self.state = AppState::Idle;
+                } else if app_pid == Some(child) {
+                    self.state = AppState::Stopping {
+                        app_pid: None,
+                        exec_pid,
+                    }
+                } else {
+                    if status != 0 {
+                        warn!("Application {} stop failed. Exit code {}", self.id, status);
+                    }
+                    self.state = AppState::Stopping {
+                        app_pid,
+                        exec_pid: None,
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.state == AppState::Idle
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.state == AppState::Idle || self.state == AppState::Complete
+    }
+
+    pub fn is_started(&self) -> bool {
+        match self.state {
+            AppState::Complete | AppState::Running { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_runaway(&self) -> bool {
+        match self.state {
+            AppState::Stopping { exec_pid: None, .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_dead(&self) -> bool {
+        match self.state {
+            AppState::Running { app_pid: Some(0) } => true,
+            _ => false,
+        }
+    }
+
+    fn get_app_pid(&self) -> Option<u32> {
+        match self.state {
+            AppState::Running { app_pid, .. } => app_pid,
+            AppState::Stopping { app_pid, .. } => app_pid,
+            _ => None,
+        }
     }
 
     fn start_process(&self, args: &[String]) -> io::Result<Child> {
@@ -121,7 +295,7 @@ impl Application {
             .spawn()
     }
 
-    pub fn read_pidfile(&self) -> Option<u32> {
+    fn read_pidfile(&self) -> Option<u32> {
         self.pidfile.as_ref().and_then(|pidfile| {
             fs::read_to_string(pidfile)
                 .map_err(|e| format!("{:?}", e))

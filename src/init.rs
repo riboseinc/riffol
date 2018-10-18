@@ -21,56 +21,88 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use application::{AppState, Application, Mode};
+use application::Application;
 use crossbeam_channel as cc;
 use libc;
 use signal_hook;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use stream;
 
+struct InitApp {
+    inner: Application,
+    needs_stop: bool,
+    kill_time: Option<Instant>,
+    start_time: Option<Instant>,
+    depends: Vec<usize>,
+    rdepends: Vec<usize>,
+}
+
+impl InitApp {
+    fn new(app: Application) -> Self {
+        Self {
+            inner: app,
+            needs_stop: false,
+            kill_time: None,
+            start_time: None,
+            depends: Vec::new(),
+            rdepends: Vec::new(),
+        }
+    }
+}
+
 pub struct Init {
-    applications: HashMap<String, Application>,
-    stream_handler: stream::Handler,
-    sig_recv: cc::Receiver<i32>,
-    fail_recv: cc::Receiver<(String, String)>,
+    applications: Vec<InitApp>,
 }
 
 impl Init {
     pub fn run(
-        applications: HashMap<String, Application>,
-        sig_recv: cc::Receiver<i32>,
-        fail_recv: cc::Receiver<(String, String)>,
+        mut applications: Vec<Application>,
+        sig_recv: &cc::Receiver<i32>,
+        fail_recv: &cc::Receiver<(String, String)>,
     ) {
-        Self {
-            applications,
-            stream_handler: stream::Handler::new(),
-            sig_recv,
-            fail_recv,
-        }.run_loop();
-    }
+        let mut apps = Self {
+            applications: applications
+                .drain(..)
+                .map(|app| InitApp::new(app))
+                .collect(),
+        };
 
-    fn run_loop(&mut self) {
-        loop {
-            if self.all_stopped() {
-                break;
+        apps.setup_dependencies();
+
+        let mut stream_handler = stream::Handler::new();
+
+        let mut shutdown = false;
+        while !(shutdown && apps.all_stopped()) {
+            apps.do_kills();
+            apps.do_stops();
+            if !shutdown {
+                apps.do_starts(&mut stream_handler);
             }
 
-            self.start_idle_applications();
-            self.stop_stopped_applications();
-
-            let mut signal = None;
-            let mut fail: Option<(String, String)> = None;
-
-            cc::Select::new()
-                .recv(&self.sig_recv, |s| signal = s)
-                .recv(&self.fail_recv, |f| fail = f)
-                .wait();
-
-            if let Some(signal) = signal {
-                self.handle_signal(signal);
+            let timer = apps.get_next_timeout().map(cc::after);
+            let mut select = cc::Select::new()
+                .recv(&sig_recv, |s| s.map(Event::Signal))
+                .recv(&fail_recv, |f| f.map(Event::Fail));
+            if let Some(timer) = timer.as_ref() {
+                select = select.recv(timer, |t| t.map(|_| Event::Timer));
             }
-            if let Some((group, message)) = fail {
-                self.handle_healthcheck_fail(&group, &message)
+
+            match select.wait() {
+                Some(Event::Signal(signal)) => {
+                    apps.handle_signal(signal);
+                    shutdown =
+                        shutdown || signal == signal_hook::SIGTERM || signal == signal_hook::SIGINT;
+                }
+                Some(Event::Fail((group, msg))) => apps.handle_healthcheck_fail(&group, &msg),
+                Some(Event::Timer) => (),
+                None => unreachable!(),
+            }
+
+            enum Event {
+                Signal(i32),
+                Fail((String, String)),
+                Timer,
             }
         }
     }
@@ -78,242 +110,215 @@ impl Init {
     fn handle_signal(&mut self, sig: i32) {
         if sig == signal_hook::SIGCHLD {
             let mut status: libc::c_int = 0;
-            let pid = unsafe { libc::wait(&mut status) } as u32;
-            debug!("SIGCHLD received {} {}", pid, status);
-            let mut failed_id = None;
-            if let Some((id, app)) = self
+            let child = unsafe { libc::wait(&mut status) } as u32;
+            debug!("SIGCHLD received {} {}", child, status);
+
+            let index = self
                 .applications
                 .iter_mut()
-                .find(|(_, app)| match app.state {
-                    AppState::Starting { pid: p, .. } if p == pid => true,
-                    AppState::Running { pid: p, .. } if p == Some(pid) => true,
-                    AppState::Stopping { pid: p, .. } if p == pid => true,
-                    _ => false,
-                }) {
-                debug!("Application ({}) process exited with code {}", id, status);
-                match app.state {
-                    AppState::Starting { stop, .. } => match app.mode {
-                        Mode::OneShot | Mode::Forking if status != 0 => {
-                            warn!("Application {} failed to start. Exit code {}", id, status);
-                            app.state = AppState::Idle;
-                        }
-                        Mode::OneShot => app.state = AppState::Stopped,
-                        Mode::Forking => {
-                            if let Some(restart) = stop {
-                                app.stop(restart).ok();
-                            } else {
-                                app.state = AppState::Running {
-                                    stop: None,
-                                    pid: app.read_pidfile(),
-                                };
-                            }
-                        }
-                        _ => unreachable!(),
-                    },
-                    AppState::Running { stop, .. } => {
-                        warn!(
-                            "Application {} stopped unexpectedly. Exit code {}",
-                            id, status
-                        );
-                        match stop {
-                            Some(true) => app.state = AppState::Idle,
-                            Some(false) => app.state = AppState::Stopped,
-                            None => {
-                                // unexpected termination, restart dependents
-                                app.state = AppState::Idle;
-                                failed_id = Some(id.clone());
-                            }
-                        }
-                    }
-                    AppState::Stopping { restart: true, .. } => app.state = AppState::Idle,
-                    AppState::Stopping { restart: false, .. } => app.state = AppState::Stopped,
-                    _ => unreachable!(),
+                .position(|app: &mut InitApp| app.inner.claim_child(child, status));
+
+            let mut stop_idx = None;
+            if let Some(idx) = index {
+                let app = &mut self.applications[idx];
+                // remove kill timer as process has died by some other means
+                app.kill_time = None;
+                if app.inner.is_dead() {
+                    // The application just died unexpectedly.  We
+                    // still need to run the stop command to
+                    // perform any cleanup.
+                    stop_idx = Some(idx);
+                } else if app.inner.is_runaway() {
+                    // The child was the stop process for an
+                    // application and the main process is still
+                    // active.  We set a kill timer in case the
+                    // applicatiion doesn't die naturally
+                    app.kill_time = Some(Instant::now() + Duration::from_secs(5));
+                } else if app.inner.is_idle() {
+                    // Application has gone idle so we can set a restart time
+                    app.start_time = Some(Instant::now() + Duration::from_secs(1));
                 }
+            } else {
+                info!("Reaped zombie with PID {}", child);
             }
-            if let Some(id) = failed_id {
-                self.fail_dependents(&id);
-            }
+
+            stop_idx.map_or((), |idx| self.schedule_stop(idx));
         } else if sig == signal_hook::SIGTERM || sig == signal_hook::SIGINT {
             debug!("Received termination signal ({})", sig);
-            self.applications
-                .values_mut()
-                .for_each(|app| match app.state {
-                    AppState::Idle => app.state = AppState::Stopped,
-                    AppState::Starting { pid, fds, .. } => {
-                        app.state = AppState::Starting {
-                            pid,
-                            fds,
-                            stop: Some(false),
-                        }
-                    }
-                    AppState::Running { .. } => {
-                        app.stop(false).ok();
-                    }
-                    AppState::Stopping { pid, .. } => {
-                        app.state = AppState::Stopping {
-                            pid,
-                            restart: false,
-                        }
-                    }
-                    AppState::Stopped => (),
-                })
+            self.applications.iter_mut().for_each(|app| {
+                if !(app.inner.is_stopped()) {
+                    app.needs_stop = true;
+                }
+            });
         }
     }
 
     fn handle_healthcheck_fail(&mut self, group: &str, _message: &str) {
-        self.applications
-            .iter()
-            .filter(|(_, app)| app.healthchecks.iter().any(|h| *h == group))
-            .map(|(id, _)| id.to_owned())
-            .collect::<Vec<_>>()
-            .iter()
-            .for_each(|id| {
-                self.fail_app(id);
-                self.fail_dependents(id);
-            });
+        let fails = self.app_idxs(|app| app.inner.healthchecks.iter().any(|h| *h == group));
+        fails.iter().for_each(|&idx| self.schedule_stop(idx));
     }
 
-    fn fail_app(&mut self, id: &str) {
-        if let Some(app) = self.applications.get_mut(id) {
-            match app.state {
-                AppState::Starting {
-                    pid,
-                    fds,
-                    stop: None,
-                } => {
-                    app.state = AppState::Starting {
-                        pid,
-                        fds,
-                        stop: Some(true),
-                    }
-                }
-                AppState::Running { stop: None, pid } => {
-                    app.state = AppState::Running {
-                        stop: Some(true),
-                        pid,
-                    }
-                }
-                _ => (),
-            };
-        }
-    }
+    fn schedule_stop(&mut self, idx: usize) {
+        let mut stops = self.applications[idx].rdepends.clone();
+        stops.push(idx);
 
-    fn fail_dependents(&mut self, id: &str) {
-        let mut failed = vec![id.to_owned()];
-        let mut remaining = self
-            .applications
-            .keys()
-            .filter(|k| k.as_str() != id)
-            .map(|k| k.to_owned())
-            .collect::<Vec<_>>();
-
-        // add all dependents of failed app
-        loop {
-            let (mut depends, others) = remaining.into_iter().partition::<Vec<_>, _>(|id| {
-                self.applications
-                    .get(id)
-                    .map(|app| app.depends.iter().any(|a| failed.iter().any(|b| a == b)))
-                    .unwrap()
-            });
-            if depends.is_empty() {
-                break;
+        stops.iter().for_each(|&idx| {
+            let app = &mut self.applications[idx];
+            if !(app.inner.is_stopped()) {
+                app.needs_stop = true;
             }
-            failed.append(&mut depends);
-            remaining = others;
-        }
-
-        // mark all as Failed
-        failed.iter().for_each(|id| self.fail_app(id));
+        });
     }
 
     fn all_stopped(&self) -> bool {
-        self.applications
-            .values()
-            .all(|a| a.state == AppState::Stopped)
+        self.applications.iter().all(|app| app.inner.is_stopped())
     }
 
-    fn start_idle_applications(&mut self) {
-        // start idle apps
-        if self
-            .applications
-            .values()
-            .any(|a| a.state == AppState::Idle)
-        {
-            // get list of running or completed OneShot apps
-            let running = self
-                .applications
-                .iter()
-                .filter(|(_, ap)| match ap.state {
-                    AppState::Running { stop: None, .. } => true,
-                    AppState::Stopped if ap.mode == Mode::OneShot => true,
-                    _ => false,
-                }).map(|(k, _)| k.to_owned())
-                .collect::<Vec<_>>();
-
-            let mut streams = Vec::new();
-            self.applications
-                .values_mut()
-                .filter(|a| a.state == AppState::Idle)
-                .for_each(|ap| {
-                    if ap.depends.iter().all(|d| running.iter().any(|r| d == r)) {
-                        ap.start().ok();
-                        if let AppState::Starting {
-                            fds: (_, stdout, stderr),
-                            pid,
-                            ..
-                        } = ap.state
-                        {
-                            if let Some(stdout) = stdout {
-                                streams.push((stdout, ap.stdout.clone()));
-                            }
-                            if let Some(stderr) = stderr {
-                                streams.push((stderr, ap.stderr.clone()));
-                            }
-                            if ap.mode == Mode::Simple {
-                                ap.state = AppState::Running {
-                                    stop: None,
-                                    pid: Some(pid),
-                                };
-                            }
-                        }
-                    }
-                });
-            streams
-                .drain(..)
-                .for_each(|(fd, s)| self.stream_handler.add_stream(fd, s.unwrap()));
-        }
-    }
-
-    fn stop_stopped_applications(&mut self) {
-        // get ids of running apps flagged with stop
-        let ids = self
+    fn do_starts(&mut self, stream_handler: &mut stream::Handler) {
+        let mut starts = self
             .applications
             .iter()
-            .filter(|(_, app)| match app.state {
-                AppState::Running { stop: Some(_), .. } => true,
-                _ => false,
-            }).map(|(k, _)| k.to_owned())
+            .enumerate()
+            .filter(|(_, app)| app.inner.is_idle())
+            .filter(|(_, app)| app.start_time.map(|t| t <= Instant::now()).unwrap_or(true))
+            .filter(|(_, app)| {
+                app.depends.iter().all(|idx| {
+                    let dep = &self.applications[*idx];
+                    !dep.needs_stop && dep.inner.is_started()
+                })
+            }).map(|(idx, _)| idx)
             .collect::<Vec<_>>();
 
-        // filter out those with running dependents
-        let ids = ids
-            .into_iter()
-            .filter(|id| {
-                !self.applications.values().any(|app| match app.state {
-                    AppState::Idle | AppState::Stopped => false,
-                    _ => app.depends.iter().any(|d| d == id),
-                })
+        starts.drain(..).for_each(|idx| {
+            let app = &mut self.applications[idx];
+            app.start_time = None;
+            if app.inner.start(stream_handler) {
+                app.kill_time = Some(Instant::now() + Duration::from_secs(5));
+            } else if app.inner.is_idle() {
+                app.start_time = Some(Instant::now() + Duration::from_secs(1));
+            }
+        });
+    }
+
+    fn do_stops(&mut self) {
+        let stops = self
+            .applications
+            .iter()
+            .enumerate()
+            .filter(|(_, app)| app.needs_stop)
+            .filter(|(_, app)| {
+                app.rdepends
+                    .iter()
+                    .all(|&idx| self.applications[idx].inner.is_stopped())
+            }).map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+
+        stops.iter().for_each(|idx| {
+            let app = &mut self.applications[*idx];
+            if app.inner.stop() {
+                app.kill_time = Some(Instant::now() + Duration::from_secs(5));
+            }
+            app.needs_stop = false;
+        });
+    }
+
+    fn do_kills(&mut self) {
+        let kills = self
+            .applications
+            .iter()
+            .enumerate()
+            .filter(|(_, app)| app.kill_time.map(|t| t <= Instant::now()).unwrap_or(false))
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+
+        kills.iter().for_each(|idx| {
+            self.applications[*idx].inner.kill();
+            self.applications[*idx].kill_time = None;
+        });
+    }
+
+    fn app_idxs<F>(&self, filter: F) -> Vec<usize>
+    where
+        F: Fn(&InitApp) -> bool,
+    {
+        self.applications
+            .iter()
+            .enumerate()
+            .filter(|(_, app)| filter(app))
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    fn get_next_timeout(&self) -> Option<Duration> {
+        let times = self.applications.iter().fold(Vec::new(), |mut times, app| {
+            app.kill_time.map(|t| times.push(t));
+            app.start_time.map(|t| times.push(t));
+            times
+        });
+        times.iter().min().map(|t| *t - (Instant::now().min(*t)))
+    }
+
+    fn setup_dependencies(&mut self) {
+        let mut all_deps = {
+            let idxs = self
+                .applications
+                .iter()
+                .enumerate()
+                .map(|(idx, app)| (app.inner.id.as_str(), idx))
+                .collect::<HashMap<_, _>>();
+
+            self.applications
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| {
+                    let (mut deps, mut others): (Vec<_>, Vec<_>) = self
+                        .applications
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| i)
+                        .partition(|&i| i == idx);
+                    loop {
+                        let (mut pass, fail): (Vec<_>, Vec<_>) = others.iter().partition(|&oidx| {
+                            deps.iter().any(|&didx| {
+                                self.applications[didx].inner.requires.iter().any(|id| {
+                                    idxs.get(id.as_str())
+                                        .map(|idx| idx == oidx)
+                                        .unwrap_or(false)
+                                })
+                            })
+                        });
+                        if pass.is_empty() {
+                            break;
+                        }
+                        deps.append(&mut pass);
+                        others = fail;
+                    }
+                    deps.swap_remove(0);
+                    deps
+                }).collect::<Vec<_>>()
+        };
+
+        self.applications
+            .iter_mut()
+            .zip(all_deps.drain(..))
+            .for_each(|(app, deps)| app.depends = deps);
+
+        let mut all_rdeps = self
+            .applications
+            .iter()
+            .enumerate()
+            .map(|(app_idx, _)| {
+                self.applications
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, app)| app.depends.iter().any(|&idx| idx == app_idx))
+                    .map(|(idx, _)| idx)
+                    .collect::<Vec<_>>()
             }).collect::<Vec<_>>();
 
-        // stop them
-        ids.into_iter().for_each(|id| {
-            self.applications.get_mut(&id).map(|app| match app.state {
-                AppState::Running {
-                    stop: Some(restart),
-                    ..
-                } => app.stop(restart),
-                _ => unreachable!(),
-            });
-        });
+        self.applications
+            .iter_mut()
+            .zip(all_rdeps.drain(..))
+            .for_each(|(app, rdeps)| app.rdepends = rdeps);
     }
 }
