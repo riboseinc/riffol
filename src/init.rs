@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use stream;
 
+#[derive(Debug)]
 struct InitApp {
     inner: Application,
     needs_stop: bool,
@@ -166,9 +167,10 @@ impl Init {
     }
 
     fn all_stopped(&self) -> bool {
-        self.applications
-            .iter()
-            .all(|app| app.inner.is_complete() || app.inner.is_idle())
+        self.applications.iter().all(|app| {
+            eprintln!("{:?}", app);
+            app.inner.is_complete() || app.inner.is_idle()
+        })
     }
 
     fn do_starts(&mut self, stream_handler: &mut stream::Handler) {
