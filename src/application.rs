@@ -253,7 +253,10 @@ impl Application {
 
     pub fn is_runaway(&self) -> bool {
         match self.state {
-            AppState::Stopping { exec_pid: None, .. } => true,
+            AppState::Stopping {
+                exec_pid: None,
+                app_pid: Some(_),
+            } => true,
             _ => false,
         }
     }
