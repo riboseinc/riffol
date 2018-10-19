@@ -45,7 +45,6 @@ struct Config {
     init: HashMap<String, Init>,
     application_group: HashMap<String, AppGroup>,
     application: HashMap<String, Application>,
-    dependency: HashMap<String, Dependencies>,
     healthchecks: HashMap<String, HealthChecks>,
     limits: HashMap<String, Limits>,
 }
@@ -58,7 +57,6 @@ struct Init {
 #[derive(FromValue)]
 struct AppGroup {
     applications: Vec<String>,
-    dependencies: Vec<String>,
 }
 
 #[derive(FromValue)]
@@ -81,11 +79,6 @@ struct Application {
     stdout: Option<Stream>,
     stderr: Option<Stream>,
     requires: Vec<String>,
-}
-
-#[derive(FromValue)]
-struct Dependencies {
-    packages: Vec<String>,
 }
 
 type Limits = HashMap<String, u64>;
@@ -152,7 +145,6 @@ enum Stream {
 #[derive(Debug)]
 pub struct Riffol {
     pub applications: Vec<application::Application>,
-    pub dependencies: Vec<String>,
     pub healthchecks: Vec<IntervalHealthCheck>,
 }
 
@@ -179,7 +171,6 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
 
     let mut riffol = Riffol {
         applications: Vec::new(),
-        dependencies: Vec::new(),
         healthchecks: Vec::new(),
     };
 
@@ -255,15 +246,6 @@ pub fn get_config<T: IntoIterator<Item = String>>(args: T) -> Result<Riffol, Str
                                 });
                             }
                             None => return Err(format!("No such application \"{}\"", id)),
-                        }
-                    }
-                    for dep_name in &group.dependencies {
-                        match config.dependency.get(dep_name) {
-                            Some(dep) => dep
-                                .packages
-                                .iter()
-                                .for_each(|d| riffol.dependencies.push(d.clone())),
-                            None => return Err(format!("No such dependencies \"{}\"", dep_name)),
                         }
                     }
                 }

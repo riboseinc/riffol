@@ -62,10 +62,7 @@ impl Init {
         fail_recv: &cc::Receiver<(String, String)>,
     ) {
         let mut apps = Self {
-            applications: applications
-                .drain(..)
-                .map(|app| InitApp::new(app))
-                .collect(),
+            applications: applications.drain(..).map(InitApp::new).collect(),
         };
 
         apps.setup_dependencies();
@@ -251,8 +248,12 @@ impl Init {
 
     fn get_next_timeout(&self) -> Option<Duration> {
         let times = self.applications.iter().fold(Vec::new(), |mut times, app| {
-            app.kill_time.map(|t| times.push(t));
-            app.start_time.map(|t| times.push(t));
+            if let Some(t) = app.kill_time {
+                times.push(t);
+            }
+            if let Some(t) = app.start_time {
+                times.push(t);
+            }
             times
         });
         times.iter().min().map(|t| *t - (Instant::now().min(*t)))
