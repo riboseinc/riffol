@@ -5,7 +5,7 @@ on Unix-like systems or as an `init` system for containers (such as
 https://github.com/krallin/tini[tini]).
 
 Riffol can be configured by creating application groups that consist
-of applications, health checks and dependency checks.
+of applications and health checks.
 
 [source]
 ----
@@ -17,15 +17,15 @@ of applications, health checks and dependency checks.
         |
  +------v------+
  | Application |
- |    Group    +-------+--------------+---------------+
- +------+------+       |              |               |
-        |              |              |               |
-        |              |              |               |
-        |              |              |               |
- +------v------+   +---v----+   +-----v------+   +----v-----+
- | Application |   | Health |   | Dependency |   | Resource |
- +-------------+   | Check  |   +------------+   |  Limits  |
-                   +--------+                    +----------+
+ |    Group    +-------+-------------+
+ +------+------+       |             |
+        |              |             |
+        |              |             |
+        |              |             |
+ +------v------+   +---v----+   +----v-----+
+ | Application |   | Health |   | Resource |
+ +-------------+   | Check  |   |  Limits  |
+                   +--------+   +----------+
 ----
 
 Riffol uses the unified configuration model from
@@ -90,9 +90,6 @@ application_group name {
   applications [
     "application.name"
   ]
-  dependencies [
-    "dependency.name"
-  ]
 }
 ----
 
@@ -104,9 +101,6 @@ application_group webstack {
   applications [
     "application.db"
     "application.www"
-  ]
-  dependencies [
-    "dependency.webstackdependencies"
   ]
 }
 ----
@@ -287,35 +281,6 @@ healthcheck db {
   timeout 10
 }
 ----
-
-=== Dependency
-
-A `packages[]` dependency is checked via an operating system specific
-method.
-
-e.g.: on RHEL/CentOS Riffol will execute `rpm -q ${name}`
-
-[source]
-----
-dependency name {
-  packages = [
-    package_name
-  ]
-}
-----
-
-E.g.:
-
-[source]
-----
-dependency webstack {
-  packages [
-    httpd
-    mariadb
-  ]
-}
-----
-
 
 === Resource Limits
 

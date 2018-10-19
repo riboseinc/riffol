@@ -39,7 +39,6 @@ extern crate log;
 
 mod application;
 mod config;
-mod distro;
 mod health;
 mod init;
 mod limit;
@@ -49,11 +48,8 @@ mod stream;
 pub fn riffol<T: std::iter::IntoIterator<Item = String>>(args: T) -> Result<(), String> {
     let config::Riffol {
         applications: apps,
-        dependencies: deps,
         healthchecks: checks,
     } = config::get_config(args)?;
-
-    distro::install_packages(&deps)?;
 
     let sig_recv = signal::recv_signals();
     let check_recv = health::recv_checks(&checks);
