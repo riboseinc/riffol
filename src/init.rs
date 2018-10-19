@@ -190,7 +190,7 @@ impl Init {
             let app = &mut self.applications[idx];
             app.start_time = None;
             if app.inner.start(stream_handler) {
-                app.kill_time = Some(Instant::now() + Duration::from_secs(5));
+                app.kill_time = Some(Instant::now() + Duration::from_secs(30));
             } else if app.inner.is_idle() {
                 app.start_time = Some(Instant::now() + Duration::from_secs(1));
             }
