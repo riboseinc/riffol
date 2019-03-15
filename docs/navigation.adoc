@@ -1,0 +1,7 @@
+---
+items:
+- { title: Quick Start, path: quickstart/ }
+- { title: Configuration, path: configuration/ }
+---
+
+= Navigation
