@@ -1,0 +1,24 @@
+= Quick start
+
+== Installation
+
+Make sure there is a Rust environment installed. Otherwise follow the
+https://www.rust-lang.org/en-US/install.html[Rust installation guide].
+
+[source,shell]
+----
+cargo install --git https:/github.com/riboseinc/riffol
+----
+
+This command will build a `riffol` binary and store it in the `bin`
+directory under `$CARGO_HOME` - usually `~/.cargo/bin/riffol`.
+
+== Usage
+
+ riffol [-f config-file]
+
+Riffol requires a configuration file. The default location of this
+file is `/etc/riffol.conf`.
+
+This location can be specified either via the `RIFFOL_CONFIG`
+environment variable or by using the `-f` command line flag.
