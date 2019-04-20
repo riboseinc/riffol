@@ -24,6 +24,8 @@
 extern crate riffol;
 extern crate stderrlog;
 
+use std::process::exit;
+
 fn main() {
     stderrlog::new()
         .module(module_path!())
@@ -32,7 +34,10 @@ fn main() {
         .unwrap();
 
     match riffol::riffol(std::env::args()) {
-        Err(e) => eprintln!("{:?}", e),
+        Err(e) => {
+            eprintln!("{:?}", e);
+            exit(1);
+        }
         _ => (),
     }
 }
