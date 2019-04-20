@@ -31,5 +31,8 @@ fn main() {
         .init()
         .unwrap();
 
-    riffol::riffol(std::env::args()).ok();
+    match riffol::riffol(std::env::args()) {
+        Err(e) => eprintln!("{:?}", e),
+        _ => (),
+    }
 }
